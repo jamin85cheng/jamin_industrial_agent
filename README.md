@@ -133,13 +133,11 @@
 
 ## 📖 文档
 
-| 文档 | 说明 |
-|------|------|
-| [📘 用户手册](docs/user_manual.md) | 完整的使用指南和配置说明 |
-| [📗 API文档](docs/api_reference.md) | REST API和WebSocket接口参考 |
-| [📙 部署指南](docs/deployment.md) | Docker/K8s生产部署说明 |
-| [📕 开发指南](docs/development.md) | 代码规范、测试、贡献指南 |
-| [📓 更新日志](CHANGELOG.md) | v1.0.0-beta2 版本更新详情 |
+对外公开材料以 `README.md` 和 `CHANGELOG.md` 为主。
+
+- 运行后可通过 `http://localhost:8000/docs` 查看 API 动态文档
+- `docs/` 目录为内部资料，仅本地保留，不随仓库公开
+- 版本更新说明继续维护在 `CHANGELOG.md`
 
 ---
 
@@ -282,7 +280,7 @@ jamin_industrial_agent/
 ├── migrations/                   # 🆕 数据库迁移
 │   └── migration_manager.py
 │
-├── docs/                         # 📚 文档
+├── docs/                         # 🔒 本地内部文档（不对外公开）
 ├── CHANGELOG.md                  # 🆕 版本更新日志
 ├── requirements.txt
 └── README.md

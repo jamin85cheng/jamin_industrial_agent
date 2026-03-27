@@ -62,16 +62,13 @@ web/dist/
 docs/_build/
 
 # Internal project docs kept locally only
+docs/
 COMMIT_SUMMARY.md
 DEVELOPMENT_PLAN.md
 PROJECT_DOCUMENTATION.md
 PROJECT_STATUS.md
 PROJECT_SUMMARY.md
 REQUIREMENTS_SPEC.md
-docs/CODE_REVIEW_REPORT.md
-docs/SECURITY_IMPROVEMENTS.md
-docs/backend_code_analysis.md
-docs/backend_fix_update_20260327.md
 
 # 操作系统
 .DS_Store
