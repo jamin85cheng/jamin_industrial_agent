@@ -7,7 +7,7 @@ global:
   evaluation_interval: 15s
   external_labels:
     environment: 'production'
-    cluster: 'miaota-cluster'
+    cluster: 'jamin-cluster'
 
 # 告警规则文件
 rule_files:
@@ -30,10 +30,10 @@ scrape_configs:
           instance: 'prometheus'
 
   # 应用服务
-  - job_name: 'miaota-app'
+  - job_name: 'jamin-app'
     consul_sd_configs:
       - server: 'consul:8500'
-        services: ['miaota-app']
+        services: ['jamin-app']
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance

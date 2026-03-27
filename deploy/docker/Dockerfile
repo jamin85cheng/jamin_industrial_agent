@@ -1,10 +1,10 @@
-﻿# Jamin Industrial Agent - Docker 镜像
+# Jamin Industrial Agent - Docker 镜像
 # 
 # 构建命令:
-#   docker build -t miaota-industrial-agent:latest .
+#   docker build -t jamin-industrial-agent:latest .
 #
 # 运行命令:
-#   docker run -p 8000:8000 -v $(pwd)/data:/app/data miaota-industrial-agent:latest
+#   docker run -p 8000:8000 -v $(pwd)/data:/app/data jamin-industrial-agent:latest
 
 FROM python:3.11-slim as builder
 

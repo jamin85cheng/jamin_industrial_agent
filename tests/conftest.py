@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 @pytest.fixture(scope="session")
 def test_data_dir() -> Generator[Path, None, None]:
     """创建临时测试数据目录"""
-    temp_dir = Path(tempfile.mkdtemp(prefix="miaota_test_"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="jamin_test_"))
     yield temp_dir
     # 清理
     shutil.rmtree(temp_dir, ignore_errors=True)

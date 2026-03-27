@@ -1,10 +1,10 @@
-﻿# 🦞 Jamin Industrial Agent - 核心模块开发完成！
+# 🦞 Jamin Industrial Agent - 核心模块开发完成！
 
 ## ✅ 已完成的工作
 
 ### 1. 项目结构搭建
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── src/                      # 源代码
 │   ├── core/                 # 核心引擎
 │   │   ├── tag_mapping.py    ✅ 点位语义化映射
@@ -149,7 +149,7 @@ miaota_industrial_agent/
 ✅ git add .
 ✅ git commit -m "first commit"
 ✅ git branch -M main
-✅ git remote add origin https://github.com/jamin85cheng/miaota_industrial_agent.git
+✅ git remote add origin https://github.com/jamin85cheng/jamin_industrial_agent.git
 ⏳ git push -u origin main  # 等待 token
 ```
 
@@ -173,7 +173,7 @@ miaota_industrial_agent/
 
 #### 1. 本地测试运行
 ```bash
-cd miaota_industrial_agent
+cd jamin_industrial_agent
 
 # 创建虚拟环境
 python -m venv venv
@@ -247,7 +247,7 @@ python src/core/label_engine.py
 
 #### 推送代码到 GitHub
 ```bash
-cd miaota_industrial_agent
+cd jamin_industrial_agent
 
 # 配置 Git (如果还没配置)
 git config user.email "jamin85cheng@users.noreply.github.com"
@@ -359,7 +359,7 @@ python start.py --demo
 当你拿到 GitHub Token 后，执行：
 
 ```bash
-cd /home/gem/workspace/agent/workspace/miaota_industrial_agent
+cd /home/gem/workspace/agent/workspace/jamin_industrial_agent
 
 # 配置 Git (如果还没配置)
 git config user.email "jamin85cheng@users.noreply.github.com"
@@ -372,7 +372,7 @@ git push -u origin main
 如果遇到认证错误，使用 Personal Access Token：
 ```bash
 # 将 YOUR_TOKEN 替换为实际 token
-git remote set-url origin https://jamin85cheng:YOUR_TOKEN@github.com/jamin85cheng/miaota_industrial_agent.git
+git remote set-url origin https://jamin85cheng:YOUR_TOKEN@github.com/jamin85cheng/jamin_industrial_agent.git
 git push -u origin main
 ```
 

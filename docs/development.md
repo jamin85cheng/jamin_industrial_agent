@@ -22,8 +22,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/jamin85cheng/miaota_industrial_agent.git
-cd miaota_industrial_agent
+git clone https://github.com/jamin85cheng/jamin_industrial_agent.git
+cd jamin_industrial_agent
 ```
 
 ### 2. 创建虚拟环境
@@ -150,7 +150,7 @@ repos:
 ## 项目结构
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── src/
 │   ├── api/                      # 🔷 FastAPI后端
 │   │   ├── main.py               # 应用入口
@@ -605,8 +605,8 @@ git tag -a v1.0.0-beta3 -m "Release v1.0.0-beta3"
 git push origin v1.0.0-beta3
 
 # 4. 构建Docker镜像
-docker build -t miaota:v1.0.0-beta3 .
-docker push miaota:v1.0.0-beta3
+docker build -t jamin:v1.0.0-beta3 .
+docker push jamin:v1.0.0-beta3
 ```
 
 ---

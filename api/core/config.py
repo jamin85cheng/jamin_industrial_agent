@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # InfluxDB
     INFLUXDB_URL: str = Field(default="http://localhost:8086")
     INFLUXDB_TOKEN: str = Field(default="")
-    INFLUXDB_ORG: str = Field(default="miaota")
+    INFLUXDB_ORG: str = Field(default="jamin")
     INFLUXDB_BUCKET: str = Field(default="industrial_data")
     
     # SQLite (元数据)

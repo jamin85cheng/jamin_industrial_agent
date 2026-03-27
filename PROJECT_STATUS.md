@@ -1,4 +1,4 @@
-﻿# 项目状态报告
+# 项目状态报告
 
 **项目**: Jamin Industrial Agent  
 **当前版本**: v1.0.0-beta2 (MiroFish)  
@@ -53,7 +53,7 @@
 ## 📁 项目结构 (v1.0.0-beta2)
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── src/
 │   ├── api/                    # API服务 (已有)
 │   ├── security/               # 安全模块 (已有)
@@ -236,7 +236,7 @@ miaota_industrial_agent/
 
 ## 📞 联系信息
 
-- **项目主页**: https://github.com/jamin85cheng/miaota_industrial_agent
+- **项目主页**: https://github.com/jamin85cheng/jamin_industrial_agent
 - **当前版本**: v1.0.0-beta2 (MiroFish)
 - **维护者**: Jamin Cheng
 

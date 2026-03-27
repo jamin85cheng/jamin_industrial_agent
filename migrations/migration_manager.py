@@ -455,27 +455,27 @@ if __name__ == "__main__":
     if command == "init":
         init_migrations()
     elif command == "status":
-        manager = MigrationManager("data/miaota.db")
+        manager = MigrationManager("data/jamin.db")
         status = manager.status()
         print(json.dumps(status, indent=2))
     elif command == "migrate":
-        manager = MigrationManager("data/miaota.db")
+        manager = MigrationManager("data/jamin.db")
         applied = manager.migrate_up()
         print(f"已应用 {len(applied)} 个迁移")
     elif command == "create":
         if len(sys.argv) < 3:
             print("请提供迁移名称")
             sys.exit(1)
-        manager = MigrationManager("data/miaota.db")
+        manager = MigrationManager("data/jamin.db")
         path = manager.create_migration(sys.argv[2])
         print(f"已创建: {path}")
     elif command == "rollback":
         steps = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-        manager = MigrationManager("data/miaota.db")
+        manager = MigrationManager("data/jamin.db")
         rolled_back = manager.migrate_down(steps)
         print(f"已回滚 {len(rolled_back)} 个迁移")
     elif command == "verify":
-        manager = MigrationManager("data/miaota.db")
+        manager = MigrationManager("data/jamin.db")
         issues = manager.verify()
         if issues:
             print("发现问题:")

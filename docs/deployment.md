@@ -1,4 +1,4 @@
-﻿# 部署指南
+# 部署指南
 
 **版本**: v1.0.0-beta2 (MiroFish)
 
@@ -50,16 +50,16 @@ sudo apt-get update
 sudo apt-get install -y python3.11 python3.11-venv python3-pip git
 
 # 创建应用目录
-sudo mkdir -p /opt/miaota
-sudo chown $USER:$USER /opt/miaota
-cd /opt/miaota
+sudo mkdir -p /opt/jamin
+sudo chown $USER:$USER /opt/jamin
+cd /opt/jamin
 ```
 
 ### 2. 代码部署
 
 ```bash
 # 克隆代码
-git clone https://github.com/jamin85cheng/miaota_industrial_agent.git .
+git clone https://github.com/jamin85cheng/jamin_industrial_agent.git .
 
 # 创建虚拟环境
 python3.11 -m venv venv
@@ -93,12 +93,12 @@ config = {
         'debug': False
     },
     'database': {
-        'path': 'data/miaota.db'
+        'path': 'data/jamin.db'
     },
     'influxdb': {
         'url': 'http://localhost:8086',
         'token': 'your-token',
-        'org': 'miaota',
+        'org': 'jamin',
         'bucket': 'industrial_data'
     },
     'diagnosis': {
@@ -156,7 +156,7 @@ services:
       - ./config:/app/config
     environment:
       - APP_ENV=production
-      - DATABASE_URL=sqlite:///app/data/miaota.db
+      - DATABASE_URL=sqlite:///app/data/jamin.db
       - INFLUXDB_URL=http://influxdb:8086
     depends_on:
       - influxdb
@@ -194,7 +194,7 @@ services:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
       - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
-      - DOCKER_INFLUXDB_INIT_ORG=miaota
+      - DOCKER_INFLUXDB_INIT_ORG=jamin
       - DOCKER_INFLUXDB_INIT_BUCKET=industrial_data
     restart: unless-stopped
 
@@ -282,7 +282,7 @@ docker-compose down
 ### 1. Nginx 反向代理
 
 ```nginx
-# /etc/nginx/sites-available/miaota
+# /etc/nginx/sites-available/jamin
 server {
     listen 80;
     server_name your-domain.com;
@@ -302,7 +302,7 @@ server {
 
     # 静态文件
     location /static/ {
-        alias /opt/miaota/src/web/static/;
+        alias /opt/jamin/src/web/static/;
         expires 30d;
     }
 
@@ -329,26 +329,26 @@ server {
 ### 2. 系统服务配置
 
 ```bash
-# /etc/systemd/system/miaota.service
-sudo tee /etc/systemd/system/miaota.service > /dev/null <<EOF
+# /etc/systemd/system/jamin.service
+sudo tee /etc/systemd/system/jamin.service > /dev/null <<EOF
 [Unit]
 Description=Jamin Industrial Agent
 After=network.target
 
 [Service]
 Type=simple
-User=miaota
-Group=miaota
-WorkingDirectory=/opt/miaota
-Environment=PATH=/opt/miaota/venv/bin
-Environment=PYTHONPATH=/opt/miaota
+User=jamin
+Group=jamin
+WorkingDirectory=/opt/jamin
+Environment=PATH=/opt/jamin/venv/bin
+Environment=PYTHONPATH=/opt/jamin
 Environment=APP_ENV=production
-ExecStart=/opt/miaota/venv/bin/gunicorn src.api.main:app \
+ExecStart=/opt/jamin/venv/bin/gunicorn src.api.main:app \
     --workers 4 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:8000 \
-    --access-logfile /opt/miaota/logs/access.log \
-    --error-logfile /opt/miaota/logs/error.log
+    --access-logfile /opt/jamin/logs/access.log \
+    --error-logfile /opt/jamin/logs/error.log
 Restart=always
 RestartSec=5
 
@@ -358,18 +358,18 @@ EOF
 
 # 启用服务
 sudo systemctl daemon-reload
-sudo systemctl enable miaota
-sudo systemctl start miaota
-sudo systemctl status miaota
+sudo systemctl enable jamin
+sudo systemctl start jamin
+sudo systemctl status jamin
 ```
 
 ### 3. 安全配置
 
 ```bash
 # 设置文件权限
-sudo chown -R miaota:miaota /opt/miaota
-sudo chmod 600 /opt/miaota/config/settings.yaml
-sudo chmod 750 /opt/miaota/data
+sudo chown -R jamin:jamin /opt/jamin
+sudo chmod 600 /opt/jamin/config/settings.yaml
+sudo chmod 750 /opt/jamin/data
 
 # 配置防火墙
 sudo ufw allow 22/tcp
@@ -380,11 +380,11 @@ sudo ufw enable
 # 配置Fail2Ban防止暴力破解
 sudo apt-get install fail2ban
 sudo tee /etc/fail2ban/jail.local > /dev/null <<EOF
-[miaota-api]
+[jamin-api]
 enabled = true
 port = http,https
-filter = miaota-api
-logpath = /opt/miaota/logs/access.log
+filter = jamin-api
+logpath = /opt/jamin/logs/access.log
 maxretry = 5
 bantime = 3600
 EOF
@@ -463,18 +463,18 @@ task_tracker:
 
 ```bash
 # 使用logrotate管理日志
-sudo tee /etc/logrotate.d/miaota > /dev/null <<EOF
-/opt/miaota/logs/*.log {
+sudo tee /etc/logrotate.d/jamin > /dev/null <<EOF
+/opt/jamin/logs/*.log {
     daily
     rotate 30
     compress
     delaycompress
     missingok
     notifempty
-    create 0644 miaota miaota
+    create 0644 jamin jamin
     sharedscripts
     postrotate
-        systemctl reload miaota
+        systemctl reload jamin
     endscript
 }
 EOF
@@ -484,14 +484,14 @@ EOF
 
 ```bash
 # 添加到crontab每分钟检查
-* * * * * /opt/miaota/scripts/health_check.sh
+* * * * * /opt/jamin/scripts/health_check.sh
 
 # health_check.sh内容:
 #!/bin/bash
 HEALTH=$(curl -sf http://localhost:8000/health || echo "FAIL")
 if [ "$HEALTH" = "FAIL" ]; then
-    systemctl restart miaota
-    echo "$(date): Service restarted" >> /opt/miaota/logs/health.log
+    systemctl restart jamin
+    echo "$(date): Service restarted" >> /opt/jamin/logs/health.log
 fi
 ```
 
@@ -500,14 +500,14 @@ fi
 ```bash
 # 数据库备份脚本
 #!/bin/bash
-BACKUP_DIR="/backup/miaota/$(date +%Y%m%d)"
+BACKUP_DIR="/backup/jamin/$(date +%Y%m%d)"
 mkdir -p $BACKUP_DIR
 
 # 备份SQLite
-cp /opt/miaota/data/miaota.db $BACKUP_DIR/
+cp /opt/jamin/data/jamin.db $BACKUP_DIR/
 
 # 备份配置
-cp -r /opt/miaota/config $BACKUP_DIR/
+cp -r /opt/jamin/config $BACKUP_DIR/
 
 # 备份InfluxDB (如果使用)
 docker exec influxdb influx backup /tmp/backup
@@ -524,7 +524,7 @@ docker cp influxdb:/tmp/backup $BACKUP_DIR/influxdb
 # 安装Prometheus + Grafana监控
 # prometheus.yml添加:
 scrape_configs:
-  - job_name: 'miaota'
+  - job_name: 'jamin'
     static_configs:
       - targets: ['localhost:8000']
     metrics_path: /metrics
@@ -535,16 +535,16 @@ scrape_configs:
 
 ```bash
 # 查看服务状态
-sudo systemctl status miaota
+sudo systemctl status jamin
 
 # 重启服务
-sudo systemctl restart miaota
+sudo systemctl restart jamin
 
 # 查看日志
-sudo tail -f /opt/miaota/logs/error.log
+sudo tail -f /opt/jamin/logs/error.log
 
 # 查看API访问日志
-sudo tail -f /opt/miaota/logs/access.log
+sudo tail -f /opt/jamin/logs/access.log
 
 # 检查端口
 netstat -tlnp | grep 8000
@@ -565,10 +565,10 @@ python migrations/migration_manager.py migrate
 
 ```bash
 # 1. 备份现有数据
-cp -r /opt/miaota/data /opt/miaota/data-backup-$(date +%Y%m%d)
+cp -r /opt/jamin/data /opt/jamin/data-backup-$(date +%Y%m%d)
 
 # 2. 拉取新版本代码
-cd /opt/miaota
+cd /opt/jamin
 git pull origin main
 
 # 3. 更新依赖
@@ -584,7 +584,7 @@ cp config/settings.yaml config/settings.yaml.bak
 # 手动合并新配置项 (参考CHANGELOG.md)
 
 # 6. 重启服务
-sudo systemctl restart miaota
+sudo systemctl restart jamin
 
 # 7. 验证
 curl http://localhost:8000/version
@@ -615,13 +615,13 @@ python -m src.api.main 2>&1 | tee startup.log
 
 ```bash
 # 检查数据库文件权限
-ls -la data/miaota.db
+ls -la data/jamin.db
 
 # 检查数据库版本
 python migrations/migration_manager.py status
 
 # 重新初始化（数据会丢失！）
-rm data/miaota.db
+rm data/jamin.db
 python migrations/migration_manager.py init
 python migrations/migration_manager.py migrate
 ```
@@ -648,7 +648,7 @@ python -c "from src.tasks import task_tracker; print(task_tracker.get_stats())"
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `APP_ENV` | 运行环境 | `development` |
-| `DATABASE_URL` | 数据库连接 | `sqlite:///data/miaota.db` |
+| `DATABASE_URL` | 数据库连接 | `sqlite:///data/jamin.db` |
 | `INFLUXDB_URL` | InfluxDB地址 | `http://localhost:8086` |
 | `REDIS_URL` | Redis地址 | `redis://localhost:6379` |
 | `JWT_SECRET` | JWT密钥 | `change-in-production` |

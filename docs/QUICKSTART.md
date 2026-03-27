@@ -10,8 +10,8 @@
 
 ```bash
 # 克隆代码
-git clone https://github.com/jamin85cheng/miaota_industrial_agent.git
-cd miaota_industrial_agent
+git clone https://github.com/jamin85cheng/jamin_industrial_agent.git
+cd jamin_industrial_agent
 
 # 创建虚拟环境
 python3.11 -m venv venv

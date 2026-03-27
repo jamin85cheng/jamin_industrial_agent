@@ -1,4 +1,4 @@
-﻿# Jamin Industrial Agent - 工业智能监控与诊断系统
+# Jamin Industrial Agent - 工业智能监控与诊断系统
 
 🦞 面向工业场景的智能监控、异常检测、故障预测与自进化系统
 
@@ -145,8 +145,8 @@
 
 ### 1. 克隆仓库
 ```bash
-git clone https://github.com/jamin85cheng/miaota_industrial_agent.git
-cd miaota_industrial_agent
+git clone https://github.com/jamin85cheng/jamin_industrial_agent.git
+cd jamin_industrial_agent
 ```
 
 ### 2. 环境准备
@@ -230,7 +230,7 @@ curl -X POST http://localhost:8000/v2/diagnosis/knowledge/query \
 ## 📁 项目结构
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── src/
 │   ├── api/                      # 🔷 后端 API (FastAPI)
 │   │   ├── main.py               # 主应用入口
@@ -439,7 +439,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## 📞 联系方式
 
-- **GitHub**: https://github.com/jamin85cheng/miaota_industrial_agent
+- **GitHub**: https://github.com/jamin85cheng/jamin_industrial_agent
 **版本**: v1.0.0-beta2 (MiroFish) | **更新时间**: 2026-03-27
 
 ---

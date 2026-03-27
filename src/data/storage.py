@@ -65,8 +65,8 @@ class InfluxDBStorage(TimeSeriesStorage):
     
     def __init__(self, host: str = "localhost", port: int = 8086,
                  username: str = "", password: str = "",
-                 database: str = "miaota_industrial",
-                 org: str = "miaota", bucket: str = "industrial_data"):
+                 database: str = "jamin_industrial",
+                 org: str = "jamin", bucket: str = "industrial_data"):
         self.host = host
         self.port = port
         self.username = username
@@ -257,7 +257,7 @@ class IoTDBStorage(TimeSeriesStorage):
     
     def __init__(self, host: str = "localhost", port: int = 6667,
                  username: str = "root", password: str = "root",
-                 storage_group: str = "root.miaota"):
+                 storage_group: str = "root.jamin"):
         self.host = host
         self.port = port
         self.username = username

@@ -39,7 +39,7 @@ database:
     host: "localhost"
     port: 8086
     bucket: "industrial_data"
-    org: "miaota"
+    org: "jamin"
     token: "your-influxdb-token"  # 从环境变量读取更安全
   
   # 关系型数据库 (配置与元数据)
@@ -52,7 +52,7 @@ database:
     enabled: false
     host: "localhost"
     port: 3306
-    database: "miaota_industrial"
+    database: "jamin_industrial"
     user: "root"
     password: "${MYSQL_PASSWORD}"  # 从环境变量读取
 

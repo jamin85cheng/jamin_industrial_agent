@@ -1,4 +1,4 @@
-﻿"""
+"""
 向量存储模块
 
 功能：
@@ -176,7 +176,7 @@ class ChromaVectorStore(VectorStore):
     """ChromaDB 向量存储"""
     
     def __init__(self, persist_directory: str = "./chroma_db",
-                 collection_name: str = "miaota_knowledge",
+                 collection_name: str = "jamin_knowledge",
                  embedding_function=None):
         self.persist_directory = persist_directory
         self.collection_name = collection_name
@@ -480,7 +480,7 @@ class VectorStoreManager:
         if store_type == "chromadb":
             self.store = ChromaVectorStore(
                 persist_directory=self.config.get("persist_directory", "./chroma_db"),
-                collection_name=self.config.get("collection_name", "miaota_knowledge")
+                collection_name=self.config.get("collection_name", "jamin_knowledge")
             )
             return self.store.connect()
         

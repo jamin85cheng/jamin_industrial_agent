@@ -18,11 +18,11 @@
 
 已修复文件：
 
-- [src/api/main.py](/E:/miaota_industrial_agent/src/api/main.py)
-- [src/api/dependencies.py](/E:/miaota_industrial_agent/src/api/dependencies.py)
-- [src/api/routers/health.py](/E:/miaota_industrial_agent/src/api/routers/health.py)
-- [src/api/routers/knowledge.py](/E:/miaota_industrial_agent/src/api/routers/knowledge.py)
-- [api/routers/auth.py](/E:/miaota_industrial_agent/api/routers/auth.py)
+- [src/api/main.py](/E:/jamin_industrial_agent/src/api/main.py)
+- [src/api/dependencies.py](/E:/jamin_industrial_agent/src/api/dependencies.py)
+- [src/api/routers/health.py](/E:/jamin_industrial_agent/src/api/routers/health.py)
+- [src/api/routers/knowledge.py](/E:/jamin_industrial_agent/src/api/routers/knowledge.py)
+- [api/routers/auth.py](/E:/jamin_industrial_agent/api/routers/auth.py)
 
 修复内容：
 
@@ -39,9 +39,9 @@
 
 已修复文件：
 
-- [src/data/collector.py](/E:/miaota_industrial_agent/src/data/collector.py)
-- [start.py](/E:/miaota_industrial_agent/start.py)
-- [src/core/__init__.py](/E:/miaota_industrial_agent/src/core/__init__.py)
+- [src/data/collector.py](/E:/jamin_industrial_agent/src/data/collector.py)
+- [start.py](/E:/jamin_industrial_agent/start.py)
+- [src/core/__init__.py](/E:/jamin_industrial_agent/src/core/__init__.py)
 
 修复内容：
 
@@ -60,7 +60,7 @@
 
 已修复文件：
 
-- [src/rules/rule_engine.py](/E:/miaota_industrial_agent/src/rules/rule_engine.py)
+- [src/rules/rule_engine.py](/E:/jamin_industrial_agent/src/rules/rule_engine.py)
 
 修复内容：
 
@@ -73,7 +73,7 @@
 
 已修复文件：
 
-- [src/data/buffer.py](/E:/miaota_industrial_agent/src/data/buffer.py)
+- [src/data/buffer.py](/E:/jamin_industrial_agent/src/data/buffer.py)
 
 修复内容：
 
@@ -88,10 +88,10 @@
 
 已修复文件：
 
-- [src/api/routers/devices.py](/E:/miaota_industrial_agent/src/api/routers/devices.py)
-- [src/api/routers/collection.py](/E:/miaota_industrial_agent/src/api/routers/collection.py)
-- [src/api/routers/diagnosis_v2.py](/E:/miaota_industrial_agent/src/api/routers/diagnosis_v2.py)
-- [api/routers/rules.py](/E:/miaota_industrial_agent/api/routers/rules.py)
+- [src/api/routers/devices.py](/E:/jamin_industrial_agent/src/api/routers/devices.py)
+- [src/api/routers/collection.py](/E:/jamin_industrial_agent/src/api/routers/collection.py)
+- [src/api/routers/diagnosis_v2.py](/E:/jamin_industrial_agent/src/api/routers/diagnosis_v2.py)
+- [api/routers/rules.py](/E:/jamin_industrial_agent/api/routers/rules.py)
 
 修复内容：
 
@@ -103,9 +103,9 @@
 
 已修复文件：
 
-- [src/utils/health_check.py](/E:/miaota_industrial_agent/src/utils/health_check.py)
-- [src/utils/structured_logging.py](/E:/miaota_industrial_agent/src/utils/structured_logging.py)
-- [src/data/__init__.py](/E:/miaota_industrial_agent/src/data/__init__.py)
+- [src/utils/health_check.py](/E:/jamin_industrial_agent/src/utils/health_check.py)
+- [src/utils/structured_logging.py](/E:/jamin_industrial_agent/src/utils/structured_logging.py)
+- [src/data/__init__.py](/E:/jamin_industrial_agent/src/data/__init__.py)
 
 修复内容：
 
@@ -123,7 +123,7 @@
 已执行：
 
 ```powershell
-& 'E:\miaota_industrial_agent\.venv\Scripts\python.exe' -m compileall src api security migrations start.py
+& 'E:\jamin_industrial_agent\.venv\Scripts\python.exe' -m compileall src api security migrations start.py
 ```
 
 结果：
@@ -135,7 +135,7 @@
 
 已执行以下运行时冒烟验证：
 
-- 导入 [src/api/main.py](/E:/miaota_industrial_agent/src/api/main.py) 中的 `app`
+- 导入 [src/api/main.py](/E:/jamin_industrial_agent/src/api/main.py) 中的 `app`
 - 初始化默认用户并创建/校验访问 token
 - 初始化 `simulated` 模式的 `PLCCollector` 并读取数据
 - 初始化 `RuleEngine` 并执行规则评估

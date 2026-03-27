@@ -1,4 +1,4 @@
-﻿# Jamin Industrial Agent - 项目完整文档
+# Jamin Industrial Agent - 项目完整文档
 
 ## 📋 项目概述
 
@@ -303,7 +303,7 @@
 ## 📁 项目结构
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── src/                      # 源代码目录
 │   ├── core/                 # 核心引擎
 │   │   ├── tag_mapping.py    # 点位语义化映射
@@ -354,8 +354,8 @@ miaota_industrial_agent/
 
 ```bash
 # 克隆仓库
-git clone https://github.com/jamin85cheng/miaota_industrial_agent.git
-cd miaota_industrial_agent
+git clone https://github.com/jamin85cheng/jamin_industrial_agent.git
+cd jamin_industrial_agent
 
 # 创建虚拟环境
 python -m venv venv
@@ -718,7 +718,7 @@ Closes #42
 
 ## 📞 联系方式
 
-- **GitHub**: https://github.com/jamin85cheng/miaota_industrial_agent
+- **GitHub**: https://github.com/jamin85cheng/jamin_industrial_agent
 - **飞书**: 通过妙搭平台联系
 - **邮箱**: jamin85cheng@users.noreply.github.com
 
@@ -764,7 +764,7 @@ Closes #42
 
 1. **本地测试运行**
    ```bash
-   cd miaota_industrial_agent
+   cd jamin_industrial_agent
    python -m venv venv
    source venv/bin/activate
    pip install pandas numpy loguru pyyaml openpyxl scikit-learn
@@ -790,7 +790,7 @@ Closes #42
 
 1. **推送代码到远程仓库**
    ```bash
-   cd miaota_industrial_agent
+   cd jamin_industrial_agent
    git config user.email "jamin85cheng@users.noreply.github.com"
    git config user.name "Jamin Cheng"
    git push -u origin main

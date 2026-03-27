@@ -1,7 +1,7 @@
 # Dockerfile - 多阶段构建
 # 
 # 构建生产镜像:
-#   docker build -f docker/Dockerfile -t miaota/industrial-agent:v1.0.0-beta2 .
+#   docker build -f docker/Dockerfile -t jamin/industrial-agent:v1.0.0-beta2 .
 
 # =================== 阶段1: 基础依赖 ===================
 FROM python:3.11-slim as base
@@ -66,7 +66,7 @@ CMD ["python", "src/main.py", "--reload", "--host", "0.0.0.0", "--port", "8000"]
 FROM base as production
 
 # 创建非root用户
-RUN groupadd -r miaota && useradd -r -g miaota miaota
+RUN groupadd -r jamin && useradd -r -g jamin jamin
 
 # 复制依赖
 COPY --from=dependencies /root/.local /root/.local
@@ -76,20 +76,20 @@ ENV PATH=/root/.local/bin:$PATH
 
 # 创建必要目录
 RUN mkdir -p /app/logs /app/data /app/config && \
-    chown -R miaota:miaota /app
+    chown -R jamin:jamin /app
 
 # 复制代码
-COPY --chown=miaota:miaota src/ ./src/
-COPY --chown=miaota:miaota security/ ./security/
-COPY --chown=miaota:miaota start.py ./
-COPY --chown=miaota:miaota config/ ./config/
+COPY --chown=jamin:jamin src/ ./src/
+COPY --chown=jamin:jamin security/ ./security/
+COPY --chown=jamin:jamin start.py ./
+COPY --chown=jamin:jamin config/ ./config/
 
 # 复制启动脚本
-COPY --chown=miaota:miaota docker/entrypoint.sh ./
+COPY --chown=jamin:jamin docker/entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 # 切换到非root用户
-USER miaota
+USER jamin
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

@@ -1,4 +1,4 @@
-﻿# Jamin Industrial Agent - 多角色并行开发计划
+# Jamin Industrial Agent - 多角色并行开发计划
 
 > **版本**: v2.0 开发规划  
 > **更新时间**: 2026-03-26  
@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Jamin Industrial Agent API",
-    version="2.0.0",
+    version="v1.0.0-beta2",
     lifespan=lifespan
 )
 
@@ -334,7 +334,7 @@ HTTP客户端: Axios
 ## 🔧 项目结构规划
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── api/                          # 🔷 后端 API
 │   ├── __init__.py
 │   ├── main.py                   # FastAPI 主应用

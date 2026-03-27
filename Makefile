@@ -12,7 +12,7 @@ PYTHON := python3
 PIP := pip3
 DOCKER := docker
 COMPOSE := docker-compose
-PROJECT_NAME := miaota-agent
+PROJECT_NAME := jamin-agent
 VERSION := v1.0.0-beta2
 
 # 颜色定义
@@ -159,7 +159,7 @@ backup:
 	@echo "$(BLUE)备份数据...$(NC)"
 	@mkdir -p backups/$(shell date +%Y%m%d)
 	$(COMPOSE) -f docker/docker-compose.prod.yml exec influxdb influx backup /tmp/backup
-	$(DOCKER) cp miaota-influxdb:/tmp/backup backups/$(shell date +%Y%m%d)/influxdb
+	$(DOCKER) cp jamin-influxdb:/tmp/backup backups/$(shell date +%Y%m%d)/influxdb
 	@echo "$(GREEN)备份完成: backups/$(shell date +%Y%m%d)/$(NC)"
 
 ## restore: 恢复数据 (BACKUP_DATE=20240115 make restore)
@@ -170,7 +170,7 @@ restore:
 		exit 1; \
 	fi
 	@echo "$(BLUE)恢复数据 $(BACKUP_DATE)...$(NC)"
-	$(DOCKER) cp backups/$(BACKUP_DATE)/influxdb miaota-influxdb:/tmp/backup
+	$(DOCKER) cp backups/$(BACKUP_DATE)/influxdb jamin-influxdb:/tmp/backup
 	$(COMPOSE) -f docker/docker-compose.prod.yml exec influxdb influx restore /tmp/backup
 	@echo "$(GREEN)数据恢复完成$(NC)"
 

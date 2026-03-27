@@ -4,11 +4,11 @@
 
 groups:
   # ==================== 应用告警 ====================
-  - name: miaota-app-alerts
+  - name: jamin-app-alerts
     rules:
       # 应用不可用
       - alert: AppDown
-        expr: up{job="miaota-app"} == 0
+        expr: up{job="jamin-app"} == 0
         for: 1m
         labels:
           severity: critical
@@ -19,9 +19,9 @@ groups:
       # 高错误率
       - alert: HighErrorRate
         expr: |
-          sum(rate(http_requests_total{status=~"5..",job="miaota-app"}[5m])) 
+          sum(rate(http_requests_total{status=~"5..",job="jamin-app"}[5m])) 
           / 
-          sum(rate(http_requests_total{job="miaota-app"}[5m])) > 0.05
+          sum(rate(http_requests_total{job="jamin-app"}[5m])) > 0.05
         for: 5m
         labels:
           severity: critical
@@ -33,7 +33,7 @@ groups:
       - alert: HighResponseTime
         expr: |
           histogram_quantile(0.95, 
-            sum(rate(http_request_duration_seconds_bucket{job="miaota-app"}[5m])) by (le)
+            sum(rate(http_request_duration_seconds_bucket{job="jamin-app"}[5m])) by (le)
           ) > 2
         for: 5m
         labels:
@@ -45,9 +45,9 @@ groups:
       # 内存使用过高
       - alert: HighMemoryUsage
         expr: |
-          process_resident_memory_bytes{job="miaota-app"} 
+          process_resident_memory_bytes{job="jamin-app"} 
           / 
-          process_memory_limit_bytes{job="miaota-app"} > 0.9
+          process_memory_limit_bytes{job="jamin-app"} > 0.9
         for: 5m
         labels:
           severity: warning

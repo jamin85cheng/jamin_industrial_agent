@@ -25,7 +25,7 @@ datasources:
     user: ${INFLUXDB_USER}
     jsonData:
       version: Flux
-      organization: miaota
+      organization: jamin
       defaultBucket: industrial_data
       tlsSkipVerify: true
     secureJsonData:

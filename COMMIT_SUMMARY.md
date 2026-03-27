@@ -1,7 +1,7 @@
-﻿# Jamin Industrial Agent - v2.0 开发完成总结
+# Jamin Industrial Agent - v1.0.0-beta2 开发完成总结
 
 > **提交日期**: 2026-03-26  
-> **版本**: v2.0.0  
+> **版本**: v1.0.0-beta2  
 > **开发模式**: 多角色并行开发
 
 ---
@@ -138,7 +138,7 @@
 ## 🗂️ 项目结构 (v2.0)
 
 ```
-miaota_industrial_agent/
+jamin_industrial_agent/
 ├── api/                          # 🔷 后端 API
 │   ├── main.py
 │   ├── core/
@@ -258,7 +258,7 @@ Docker 部署     [████████████████████]
 
 ## 👥 协作信息
 
-- **GitHub**: https://github.com/jamin85cheng/miaota_industrial_agent
+- **GitHub**: https://github.com/jamin85cheng/jamin_industrial_agent
 - **后端 API 文档**: http://localhost:8000/api/docs (启动后)
 - **前端界面**: http://localhost:3000 (启动后)
 
@@ -267,6 +267,6 @@ Docker 部署     [████████████████████]
 **多角色并行开发完成！** 🦞🚀
 
 *提交时间*: 2026-03-26  
-*版本*: v2.0.0  
+*版本*: v1.0.0-beta2  
 *状态*: 生产就绪核心功能完成
 

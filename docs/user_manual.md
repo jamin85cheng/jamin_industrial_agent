@@ -1,4 +1,4 @@
-﻿# Jamin Industrial Agent 用户手册
+# Jamin Industrial Agent 用户手册
 
 **版本**: v1.0.0-beta2 (MiroFish)
 
@@ -22,7 +22,7 @@
 
 ```bash
 # 1. 进入项目目录
-cd miaota_industrial_agent
+cd jamin_industrial_agent
 
 # 2. 激活虚拟环境
 source venv/bin/activate
@@ -466,7 +466,7 @@ DO低
 
 - [CHANGELOG.md](../CHANGELOG.md) - 版本更新日志
 - [API文档](api_reference.md) - 完整API参考
-- [GitHub](https://github.com/jamin85cheng/miaota_industrial_agent) - 项目源码
+- [GitHub](https://github.com/jamin85cheng/jamin_industrial_agent) - 项目源码
 
 ---
 

@@ -23,7 +23,7 @@ info:
 servers:
   - url: http://localhost:8000/api/v1
     description: 本地开发环境
-  - url: https://api.miaota.local/api/v1
+  - url: https://api.jamin.local/api/v1
     description: 生产环境
 
 security:
