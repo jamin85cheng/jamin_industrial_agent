@@ -1,102 +1,148 @@
-/**
- * 告警中心页面
- */
-
 import React from 'react'
-import { Card, Table, Tag, Button, Badge, Space } from 'antd'
+import { Card, Table, Tag, Button, Badge, Space, message, Statistic, Row, Col, Empty } from 'antd'
 import { CheckCircleOutlined, BellOutlined } from '@ant-design/icons'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { TableProps } from 'antd'
+import { alertsApi, extractApiError, type AlertRecord } from '../../lib/api'
+
+const severityMeta: Record<AlertRecord['severity'], { color: string; label: string }> = {
+  critical: { color: 'red', label: '严重' },
+  warning: { color: 'orange', label: '警告' },
+  info: { color: 'blue', label: '提示' },
+}
+
+const statusMeta: Record<AlertRecord['status'], { color: string; label: string }> = {
+  active: { color: 'processing', label: '待确认' },
+  acknowledged: { color: 'success', label: '已确认' },
+  resolved: { color: 'default', label: '已解决' },
+}
 
 const Alerts: React.FC = () => {
-  const columns = [
+  const queryClient = useQueryClient()
+
+  const alertsQuery = useQuery({
+    queryKey: ['alerts'],
+    queryFn: alertsApi.list,
+  })
+
+  const statsQuery = useQuery({
+    queryKey: ['alerts', 'stats'],
+    queryFn: alertsApi.stats,
+  })
+
+  const acknowledgeMutation = useMutation({
+    mutationFn: (alertId: string) => alertsApi.acknowledge(alertId),
+    onSuccess: () => {
+      message.success('告警已确认')
+      void queryClient.invalidateQueries({ queryKey: ['alerts'] })
+      void queryClient.invalidateQueries({ queryKey: ['alerts', 'stats'] })
+    },
+    onError: (error) => {
+      message.error(extractApiError(error, '确认告警失败'))
+    },
+  })
+
+  const columns: TableProps<AlertRecord>['columns'] = [
     {
-      title: '告警ID',
-      dataIndex: 'alert_id',
-      key: 'alert_id',
+      title: '告警 ID',
+      dataIndex: 'id',
+      key: 'id',
     },
     {
       title: '级别',
       dataIndex: 'severity',
       key: 'severity',
-      render: (severity: string) => {
-        const colors: any = {
-          critical: 'red',
-          warning: 'orange',
-          info: 'blue',
-        }
-        const labels: any = {
-          critical: '紧急',
-          warning: '警告',
-          info: '提示',
-        }
-        return <Tag color={colors[severity]}>{labels[severity]}</Tag>
+      render: (severity: AlertRecord['severity']) => {
+        const meta = severityMeta[severity]
+        return <Tag color={meta.color}>{meta.label}</Tag>
       },
     },
     {
       title: '规则名称',
       dataIndex: 'rule_name',
       key: 'rule_name',
+      render: (value: string | null | undefined) => value || '-',
     },
     {
       title: '描述',
-      dataIndex: 'description',
-      key: 'description',
+      dataIndex: 'message',
+      key: 'message',
+    },
+    {
+      title: '设备',
+      dataIndex: 'device_id',
+      key: 'device_id',
+      render: (value: string | null | undefined) => value || '-',
     },
     {
       title: '时间',
-      dataIndex: 'timestamp',
-      key: 'timestamp',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (value: string) => new Date(value).toLocaleString(),
     },
     {
       title: '状态',
-      dataIndex: 'acknowledged',
-      key: 'acknowledged',
-      render: (ack: boolean) => (
-        ack ? (
-          <Tag color="success">已确认</Tag>
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: AlertRecord['status']) => {
+        const meta = statusMeta[status]
+        return status === 'active' ? (
+          <Badge status={meta.color as 'processing'} text={meta.label} />
         ) : (
-          <Badge status="processing" text="未确认" />
+          <Tag color={meta.color}>{meta.label}</Tag>
         )
-      ),
+      },
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: any) => (
+      render: (_, record) => (
         <Space>
-          {!record.acknowledged && (
-            <Button type="primary" size="small" icon={<CheckCircleOutlined />}>
+          {record.status === 'active' && (
+            <Button
+              type="primary"
+              size="small"
+              icon={<CheckCircleOutlined />}
+              loading={acknowledgeMutation.isPending}
+              onClick={() => acknowledgeMutation.mutate(record.id)}
+            >
               确认
             </Button>
           )}
-          <Button size="small">详情</Button>
+          <Button size="small" onClick={() => message.info(record.message)}>
+            详情
+          </Button>
         </Space>
       ),
     },
   ]
 
-  const data = [
-    {
-      key: '1',
-      alert_id: 'ALERT_001',
-      severity: 'critical',
-      rule_name: '缺氧异常',
-      description: '溶解氧浓度低于 2.0 mg/L',
-      timestamp: '2024-01-15 14:32:10',
-      acknowledged: false,
-    },
-    {
-      key: '2',
-      alert_id: 'ALERT_002',
-      severity: 'warning',
-      rule_name: 'pH异常',
-      description: 'pH值偏离正常范围',
-      timestamp: '2024-01-15 14:28:05',
-      acknowledged: true,
-    },
-  ]
+  const alerts = alertsQuery.data?.alerts ?? []
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <Card loading={statsQuery.isLoading}>
+            <Statistic title="总告警数" value={statsQuery.data?.total_alerts ?? 0} prefix={<BellOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card loading={statsQuery.isLoading}>
+            <Statistic title="待确认" value={statsQuery.data?.active_alerts ?? 0} valueStyle={{ color: '#fa8c16' }} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card loading={statsQuery.isLoading}>
+            <Statistic
+              title="已确认/已解决"
+              value={(statsQuery.data?.total_alerts ?? 0) - (statsQuery.data?.active_alerts ?? 0)}
+              valueStyle={{ color: '#52c41a' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
       <Card
         title={
           <span>
@@ -105,12 +151,33 @@ const Alerts: React.FC = () => {
         }
         extra={
           <Space>
-            <Button>全部确认</Button>
-            <Button type="primary">导出报表</Button>
+            <Button
+              onClick={() => {
+                const firstActiveAlert = alerts.find((item) => item.status === 'active')
+                if (!firstActiveAlert) {
+                  message.info('当前没有待确认告警')
+                  return
+                }
+                acknowledgeMutation.mutate(firstActiveAlert.id)
+              }}
+              disabled={!alerts.some((item) => item.status === 'active')}
+            >
+              快速确认一条
+            </Button>
+            <Button type="primary" onClick={() => message.success('导出功能将在接入报表服务后启用')}>
+              导出报表
+            </Button>
           </Space>
         }
       >
-        <Table columns={columns} dataSource={data} />
+        <Table
+          columns={columns}
+          dataSource={alerts}
+          rowKey="id"
+          loading={alertsQuery.isLoading}
+          pagination={{ pageSize: 6 }}
+          locale={{ emptyText: <Empty description="暂无告警数据" /> }}
+        />
       </Card>
     </div>
   )

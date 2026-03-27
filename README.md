@@ -1,4 +1,4 @@
-# Miaota Industrial Agent - 工业智能监控与诊断系统
+﻿# Jamin Industrial Agent - 工业智能监控与诊断系统
 
 🦞 面向工业场景的智能监控、异常检测、故障预测与自进化系统
 
@@ -325,7 +325,7 @@ miaota_industrial_agent/
 问题: 曝气池DO持续偏低，风机噪音大
 
 传统方式: 2小时排查 → 可能误判
-Miaota V2:
+Jamin V2:
   • 机械专家分析振动频谱 → 轴承磨损概率85%
   • 电气专家分析电流曲线 → 电机负载异常
   • 工艺专家评估DO趋势 → 曝气效率下降40%
@@ -445,3 +445,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ---
 
 **🐟 准备好体验群体智能诊断了吗？立即升级到 V1.0.0-beta2！**
+

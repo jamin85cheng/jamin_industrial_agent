@@ -1,4 +1,4 @@
-# Makefile - Miaota Industrial Agent
+# Makefile - Jamin Industrial Agent
 # 
 # 常用命令快捷方式
 
@@ -13,7 +13,7 @@ PIP := pip3
 DOCKER := docker
 COMPOSE := docker-compose
 PROJECT_NAME := miaota-agent
-VERSION := v1.0.0-beta1
+VERSION := v1.0.0-beta2
 
 # 颜色定义
 BLUE := \033[36m
@@ -24,7 +24,7 @@ NC := \033[0m # No Color
 
 ## help: 显示帮助信息
 help:
-	@echo "$(BLUE)Miaota Industrial Agent - 可用命令$(NC)"
+	@echo "$(BLUE)Jamin Industrial Agent - 可用命令$(NC)"
 	@echo ""
 	@echo "$(GREEN)开发命令:$(NC)"
 	@echo "  make install          安装依赖"
@@ -255,3 +255,4 @@ release:
 	git push origin $(VERSION)
 	$(DOCKER) build -f docker/Dockerfile -t $(PROJECT_NAME):$(VERSION) --target production .
 	@echo "$(GREEN)版本 $(VERSION) 已发布$(NC)"
+

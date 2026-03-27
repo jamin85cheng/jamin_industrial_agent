@@ -20,8 +20,13 @@ ENV/
 data/raw/*.csv
 data/processed/*.csv
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/vector_db/
 *.sqlite
+src/api/data/*.db
+src/api/data/*.db-shm
+src/api/data/*.db-wal
 
 # 日志
 logs/
@@ -48,6 +53,10 @@ htmlcov/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
+
+# Frontend
+web/node_modules/
+web/dist/
 
 # 文档构建
 docs/_build/

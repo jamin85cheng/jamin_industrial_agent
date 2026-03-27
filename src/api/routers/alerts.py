@@ -48,19 +48,19 @@ class AlertRule(BaseModel):
 class Alert(BaseModel):
     """告警"""
     id: str
-    rule_id: Optional[str]
-    rule_name: Optional[str]
+    rule_id: Optional[str] = None
+    rule_name: Optional[str] = None
     severity: AlertSeverity
     message: str
-    device_id: Optional[str]
-    tag: Optional[str]
-    value: Optional[float]
-    threshold: Optional[float]
+    device_id: Optional[str] = None
+    tag: Optional[str] = None
+    value: Optional[float] = None
+    threshold: Optional[float] = None
     status: AlertStatus
     created_at: datetime
-    acknowledged_by: Optional[str]
-    acknowledged_at: Optional[datetime]
-    resolved_at: Optional[datetime]
+    acknowledged_by: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
 
 
 class AlertListResponse(BaseModel):
@@ -81,6 +81,8 @@ _alert_counters = {"total": 0, "today": 0, "active": 0}
 
 
 def init_default_rules():
+    if _alert_rules.size() > 0:
+        return
     """初始化默认告警规则"""
     default_rules = [
         {
@@ -117,6 +119,34 @@ def init_default_rules():
     
     for rule in default_rules:
         _alert_rules.set(rule["rule_id"], rule)
+
+
+def init_default_alerts():
+    """Initialize demo alerts for local development and UI validation."""
+    if _alerts.size() > 0:
+        return
+
+    init_default_rules()
+    create_alert(
+        "RULE_001",
+        "溶解氧浓度低于 2.0 mg/L，建议检查曝气量与风机运行状态。",
+        "critical",
+        "DEV_AERATION_01",
+        "DO",
+        1.8,
+        2.0,
+        "default",
+    )
+    create_alert(
+        "RULE_002",
+        "鼓风机振动偏高，请关注轴承与对中状态。",
+        "warning",
+        "DEV_BLOWER_01",
+        "vibration",
+        11.4,
+        10.0,
+        "default",
+    )
 
 
 @router.get("", response_model=AlertListResponse)

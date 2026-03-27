@@ -1,4 +1,4 @@
-"""
+﻿"""
 诊断报告生成模块
 
 功能需求: L-07 诊断报告 - 生成PDF/HTML报告
@@ -186,7 +186,7 @@ class ReportGenerator:
         # 页脚
         story.append(Spacer(1, 30))
         story.append(Paragraph(
-            "— 本报告由 Miaota Industrial Agent 智能诊断系统生成 —",
+            "— 本报告由 Jamin Industrial Agent 智能诊断系统生成 —",
             ParagraphStyle('Footer', parent=normal_style, alignment=1, textColor=colors.grey)
         ))
         
@@ -309,8 +309,8 @@ class ReportGenerator:
         {'<h2>六、参考资料</h2><ul>' + ''.join(f'<li class="list-item">{ref.get("title", "")}</li>' for ref in report.references) + '</ul>' if report.references else ''}
         
         <div class="footer">
-            <p>本报告由 Miaota Industrial Agent 智能诊断系统生成</p>
-            <p>© 2024 Miaota Industrial Agent</p>
+            <p>本报告由 Jamin Industrial Agent 智能诊断系统生成</p>
+            <p>© 2024 Jamin Industrial Agent</p>
         </div>
     </div>
 </body>
@@ -365,7 +365,7 @@ class ReportGenerator:
 
 ---
 
-*本报告由 Miaota Industrial Agent 智能诊断系统生成*
+*本报告由 Jamin Industrial Agent 智能诊断系统生成*
 """
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -456,3 +456,4 @@ if __name__ == "__main__":
         print(f"PDF报告: {pdf_path}")
     except Exception as e:
         print(f"PDF生成失败: {e}")
+

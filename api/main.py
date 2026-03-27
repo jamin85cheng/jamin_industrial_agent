@@ -1,5 +1,5 @@
 """
-Miaota Industrial Agent - FastAPI 主应用
+Jamin Industrial Agent - FastAPI 主应用
 后端服务入口
 
 作者: Backend Team
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     - 释放资源
     """
     logger.info("=" * 60)
-    logger.info("🚀 Miaota Industrial Agent API 启动中...")
+    logger.info("🚀 Jamin Industrial Agent API 启动中...")
     logger.info("=" * 60)
     
     try:
@@ -75,9 +75,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="Miaota Industrial Agent API",
+    title="Jamin Industrial Agent API",
     description="工业智能监控与诊断系统 API",
-    version="2.0.0",
+    version="v1.0.0-beta2",
     docs_url="/api/docs" if settings.DEBUG else None,
     redoc_url="/api/redoc" if settings.DEBUG else None,
     openapi_url="/api/openapi.json" if settings.DEBUG else None,
@@ -123,7 +123,7 @@ async def health_check():
     """服务健康检查端点"""
     return {
         "status": "healthy",
-        "version": "2.0.0",
+        "version": "v1.0.0-beta2",
         "timestamp": asyncio.get_event_loop().time()
     }
 
@@ -252,3 +252,4 @@ if __name__ == "__main__":
         workers=1 if settings.DEBUG else 4,
         log_level="info"
     )
+

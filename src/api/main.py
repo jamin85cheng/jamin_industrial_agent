@@ -1,4 +1,4 @@
-"""
+﻿"""
 Main FastAPI application for the backend API.
 """
 
@@ -19,6 +19,8 @@ from src.api.dependencies import (
     get_current_user,
     init_default_users,
 )
+from src.api.routers.alerts import init_default_alerts, init_default_rules
+from src.api.routers.devices import init_default_devices
 from src.utils.health_check import init_default_checks
 from src.utils.structured_logging import get_logger
 logger = get_logger("api")
@@ -30,6 +32,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting API service")
     init_default_users()
     init_default_checks()
+    init_default_devices()
+    init_default_rules()
+    init_default_alerts()
     try:
         yield
     finally:
@@ -37,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Miaota Industrial Agent API",
+    title="Jamin Industrial Agent API",
     description=(
         "Industrial monitoring, collection, alerting, analysis, and diagnosis APIs."
     ),
@@ -160,7 +165,7 @@ for router_module in [
 @app.get("/")
 async def root():
     return {
-        "name": "Miaota Industrial Agent API",
+        "name": "Jamin Industrial Agent API",
         "version": "v1.0.0-beta2",
         "status": "running",
         "docs": "/docs",
@@ -239,3 +244,4 @@ if __name__ == "__main__":
         reload=True,
         log_level="info",
     )
+

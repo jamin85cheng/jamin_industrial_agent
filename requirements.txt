@@ -1,99 +1,63 @@
-# Miaota Industrial Agent - 依赖配置
-# 版本: v1.0.0-beta2 (MiroFish)
+﻿# Jamin Industrial Agent runtime dependencies
+# Target environments:
+# - Windows development workstation
+# - Ubuntu production server
 
-# ============================================
-# 核心依赖
-# ============================================
-pandas>=2.0.0
+# Core data processing
 numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+joblib>=1.3.0
 
-# PLC 通信
-python-snap7>=1.3.0      # 西门子 S7 协议
-pymodbus>=3.5.0          # Modbus TCP/RTU
-opcua>=0.98.0            # OPC UA (可选)
+# Configuration and logging
+loguru>=0.7.2
+PyYAML>=6.0.1
+python-dotenv>=1.0.0
+jsonschema>=4.21.0
+tqdm>=4.66.0
+click>=8.1.7
+psutil>=5.9.0
 
-# 时序数据库
-influxdb-client>=1.38.0  # InfluxDB
-iotdb-client>=0.13.0     # Apache IoTDB (可选)
-sqlite-utils>=3.35       # SQLite 工具
+# API service
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-jose[cryptography]>=3.3.0
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
 
-# 机器学习与数据分析
-scikit-learn>=1.3.0      # 异常检测算法
-scipy>=1.11.0            # 科学计算
+# Industrial protocol and storage adapters
+python-snap7>=1.3.0
+pymodbus>=3.5.0
+influxdb-client>=1.38.0
+apache-iotdb>=1.3.0
+aiosqlite>=0.19.0
 
-# 时序预测
-neuralprophet>=0.7.0     # NeuralProphet
-prophet>=1.1.5           # Facebook Prophet
+# Document and report processing
+openpyxl>=3.1.2
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+reportlab>=4.1.0
 
-# 深度学习 (可选，用于 LSTM 等)
-torch>=2.0.0
-torchvision>=0.15.0
+# Forecasting and machine learning
+prophet>=1.1.5
+neuralprophet>=0.7.0
+statsmodels>=0.14.0
+tensorflow-intel>=2.15.0; platform_system == "Windows"
+tensorflow>=2.15.0; platform_system == "Linux"
 
-# LLM 与 RAG
-langchain>=0.1.0
-langchain-community>=0.0.20
-chromadb>=0.4.22         # 向量数据库
-sentence-transformers>=2.2.2  # Embedding 模型
-transformers>=4.36.0     # HuggingFace Transformers
+# Knowledge base and vector storage
+chromadb>=0.4.22
+faiss-cpu>=1.8.0; platform_system == "Linux"
 
-# 配置与日志
-pyyaml>=6.0.1            # YAML 配置
-python-dotenv>=1.0.0     # 环境变量
-loguru>=0.7.2            # 日志库
+# LLM providers
+dashscope>=1.20.0
+zhipuai>=2.0.0
+openai>=1.14.0
 
-# Web 界面
-streamlit>=1.30.0        # 快速搭建大屏
-plotly>=5.18.0           # 交互式图表
-echarts-python>=0.1.0    # ECharts (可选)
+# Ubuntu server only
+gunicorn>=21.2.0; platform_system == "Linux"
+supervisor>=4.2.5; platform_system == "Linux"
 
-# API 服务
-fastapi>=0.109.0         # REST API
-uvicorn>=0.27.0          # ASGI 服务器
-pydantic>=2.5.0          # 数据验证
-
-# 数据处理
-openpyxl>=3.1.2          # Excel 读写
-jsonschema>=4.21.0       # JSON 校验
-
-# 工具函数
-tqdm>=4.66.0             # 进度条
-click>=8.1.7             # CLI 工具
-
-# ============================================
-# V1.0.0-beta2 新增: MiroFish集成
-# ============================================
-
-# 知识图谱 (GraphRAG)
-neo4j>=5.15.0            # Neo4j图数据库 (可选，用于知识图谱持久化)
-
-# CAMEL框架 (多智能体)
-camel-ai>=0.1.0          # CAMEL多智能体框架 (可选)
-
-# 异步任务
-aioredis>=2.0.0          # Redis异步客户端
-celery>=5.3.0            # 分布式任务队列 (可选)
-
-# ============================================
-# 测试
-# ============================================
-pytest>=8.0.0
-pytest-asyncio>=0.23.0   # 异步测试支持 (V2新增)
-pytest-cov>=4.1.0
-
-# 部署 (生产环境)
-gunicorn>=21.2.0         # WSGI 服务器 (Linux)
-supervisor>=4.2.5        # 进程管理 (Linux)
-
-# ============================================
-# 开发工具
-# ============================================
-black>=24.0.0            # 代码格式化
-isort>=5.13.0            # 导入排序
-flake8>=7.0.0            # 代码检查
-mypy>=1.8.0              # 类型检查
-pre-commit>=3.6.0        # 预提交钩子
-
-# ============================================
-# Windows 特定依赖 (开发环境)
-# ============================================
-# pywin32>=306           # Windows API (如需)

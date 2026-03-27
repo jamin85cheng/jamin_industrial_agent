@@ -1,4 +1,4 @@
-# 部署指南
+﻿# 部署指南
 
 **版本**: v1.0.0-beta2 (MiroFish)
 
@@ -88,7 +88,7 @@ python -c "
 import yaml
 config = {
     'app': {
-        'name': 'Miaota Industrial Agent',
+        'name': 'Jamin Industrial Agent',
         'version': 'v1.0.0-beta2',
         'debug': False
     },
@@ -145,7 +145,7 @@ gunicorn src.api.main:app \
 version: '3.8'
 
 services:
-  # Miaota API服务
+  # Jamin API服务
   api:
     build: .
     ports:
@@ -332,7 +332,7 @@ server {
 # /etc/systemd/system/miaota.service
 sudo tee /etc/systemd/system/miaota.service > /dev/null <<EOF
 [Unit]
-Description=Miaota Industrial Agent
+Description=Jamin Industrial Agent
 After=network.target
 
 [Service]
@@ -685,3 +685,4 @@ python -c "from src.tasks import task_tracker; print(task_tracker.get_stats())"
 ---
 
 **版本**: v1.0.0-beta2 (MiroFish) | **最后更新**: 2026-03-27
+

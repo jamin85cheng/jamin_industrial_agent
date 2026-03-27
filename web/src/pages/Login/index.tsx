@@ -1,40 +1,28 @@
-/**
- * 登录页面
- */
-
 import React, { useState } from 'react'
-import { Form, Input, Button, Card, message } from 'antd'
+import { Form, Input, Button, Card, Typography, message } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useAuthStore } from '../../stores/auth'
+import { authApi, extractApiError } from '../../lib/api'
 import './style.css'
+
+interface LoginFormValues {
+  username: string
+  password: string
+}
 
 const Login: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const { login } = useAuthStore()
 
-  const handleSubmit = async (values: { username: string; password: string }) => {
+  const handleSubmit = async (values: LoginFormValues) => {
     setLoading(true)
-    
+
     try {
-      // TODO: 调用真实登录 API
-      // const response = await api.post('/auth/login', values)
-      
-      // 模拟登录
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      
-      if (values.username === 'admin' && values.password === 'admin123') {
-        login('mock_token', {
-          user_id: 'user_001',
-          username: values.username,
-          email: 'admin@miaota.ai',
-          role: 'admin',
-        })
-        message.success('登录成功')
-      } else {
-        message.error('用户名或密码错误')
-      }
+      const response = await authApi.login(values)
+      login(response.token, response.user)
+      message.success(`欢迎回来，${response.user.username}`)
     } catch (error) {
-      message.error('登录失败')
+      message.error(extractApiError(error, '登录失败，请稍后重试'))
     } finally {
       setLoading(false)
     }
@@ -45,52 +33,43 @@ const Login: React.FC = () => {
       <div className="login-container">
         <Card className="login-card">
           <div className="login-header">
-            <div className="login-logo">🦞</div>
-            <h1 className="login-title">Miaota Industrial Agent</h1>
+            <div className="login-logo">JIA</div>
+            <h1 className="login-title">Jamin Industrial Agent</h1>
             <p className="login-subtitle">工业智能监控与诊断系统</p>
           </div>
 
-          <Form
-            name="login"
-            onFinish={handleSubmit}
-            autoComplete="off"
-            size="large"
-          >
+          <Form name="login" onFinish={handleSubmit} autoComplete="off" size="large">
             <Form.Item
               name="username"
               rules={[{ required: true, message: '请输入用户名' }]}
             >
-              <Input
-                prefix={<UserOutlined />}
-                placeholder="用户名"
-              />
+              <Input prefix={<UserOutlined />} placeholder="用户名" />
             </Form.Item>
 
             <Form.Item
               name="password"
               rules={[{ required: true, message: '请输入密码' }]}
             >
-              <Input.Password
-                prefix={<LockOutlined />}
-                placeholder="密码"
-              />
+              <Input.Password prefix={<LockOutlined />} placeholder="密码" />
             </Form.Item>
 
             <Form.Item>
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={loading}
-                block
-              >
+              <Button type="primary" htmlType="submit" loading={loading} block>
                 登录
               </Button>
             </Form.Item>
           </Form>
 
           <div className="login-tips">
-            <p>默认账号：admin / admin123</p>
-            <p>操作员：operator / operator123</p>
+            <Typography.Paragraph style={{ marginBottom: 4 }}>
+              演示账号：admin / admin123
+            </Typography.Paragraph>
+            <Typography.Paragraph style={{ marginBottom: 4 }}>
+              操作员账号：operator / operator123
+            </Typography.Paragraph>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              只读账号：viewer / viewer123
+            </Typography.Paragraph>
           </div>
         </Card>
       </div>

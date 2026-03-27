@@ -1,9 +1,5 @@
-/**
- * 主布局组件
- */
-
 import React, { useState } from 'react'
-import { Layout, Menu, theme, Badge, Avatar, Dropdown } from 'antd'
+import { Layout, Menu, theme, Badge, Avatar, Dropdown, Button, Typography, message } from 'antd'
 import {
   DashboardOutlined,
   AlertOutlined,
@@ -13,15 +9,65 @@ import {
   BellOutlined,
   UserOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons'
+import type { MenuProps } from 'antd'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../stores/auth'
 
 const { Header, Sider } = Layout
+const { Text } = Typography
 
 interface MainLayoutProps {
   children: React.ReactNode
 }
+
+const menuItems: MenuProps['items'] = [
+  {
+    key: '/dashboard',
+    icon: <DashboardOutlined />,
+    label: '监控大屏',
+  },
+  {
+    key: '/alerts',
+    icon: <AlertOutlined />,
+    label: (
+      <span>
+        告警中心
+        <Badge count={3} size="small" style={{ marginLeft: 8 }} />
+      </span>
+    ),
+  },
+  {
+    key: '/diagnosis',
+    icon: <RobotOutlined />,
+    label: '智能诊断',
+  },
+  {
+    key: '/rules',
+    icon: <FileTextOutlined />,
+    label: '规则管理',
+  },
+  {
+    key: '/config',
+    icon: <SettingOutlined />,
+    label: '系统配置',
+  },
+]
+
+const userMenuItems: MenuProps['items'] = [
+  {
+    key: 'profile',
+    icon: <UserOutlined />,
+    label: '个人中心',
+  },
+  {
+    key: 'logout',
+    icon: <LogoutOutlined />,
+    label: '退出登录',
+  },
+]
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false)
@@ -33,75 +79,29 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     token: { colorBgContainer },
   } = theme.useToken()
 
-  // 菜单项
-  const menuItems = [
-    {
-      key: '/dashboard',
-      icon: <DashboardOutlined />,
-      label: '监控大屏',
-    },
-    {
-      key: '/alerts',
-      icon: <AlertOutlined />,
-      label: (
-        <span>
-          告警中心
-          <Badge count={3} size="small" style={{ marginLeft: 8 }} />
-        </span>
-      ),
-    },
-    {
-      key: '/diagnosis',
-      icon: <RobotOutlined />,
-      label: '智能诊断',
-    },
-    {
-      key: '/rules',
-      icon: <FileTextOutlined />,
-      label: '规则管理',
-    },
-    {
-      key: '/config',
-      icon: <SettingOutlined />,
-      label: '系统配置',
-    },
-  ]
-
-  // 用户菜单
-  const userMenuItems = [
-    {
-      key: 'profile',
-      icon: <UserOutlined />,
-      label: '个人中心',
-    },
-    {
-      key: 'logout',
-      icon: <LogoutOutlined />,
-      label: '退出登录',
-    },
-  ]
-
-  const handleMenuClick = ({ key }: { key: string }) => {
+  const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'logout') {
       logout()
-    } else if (key === 'profile') {
-      // TODO: 打开个人中心
-    } else {
-      navigate(key)
+      navigate('/login', { replace: true })
+      return
     }
+
+    if (key === 'profile') {
+      message.info('个人中心功能正在开发中')
+      return
+    }
+
+    navigate(key)
   }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      {/* 侧边栏 */}
       <Sider
-        trigger={null}
         collapsible
         collapsed={collapsed}
         theme="light"
-        style={{
-          boxShadow: '2px 0 8px rgba(0,0,0,0.1)',
-        }}
+        style={{ boxShadow: '2px 0 8px rgba(0,0,0,0.1)' }}
+        onCollapse={setCollapsed}
       >
         <div
           style={{
@@ -120,7 +120,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
               color: '#1890ff',
             }}
           >
-            {collapsed ? '🦞' : '🦞 Miaota IA'}
+            {collapsed ? 'JIA' : 'Jamin IA'}
           </h1>
         </div>
 
@@ -134,7 +134,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       </Sider>
 
       <Layout>
-        {/* 顶部栏 */}
         <Header
           style={{
             padding: '0 24px',
@@ -145,30 +144,34 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
           }}
         >
-          <div style={{ fontSize: 16, fontWeight: 500 }}>
-            工业智能监控与诊断系统
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <Button
+              type="text"
+              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => setCollapsed((current) => !current)}
+            />
+            <div style={{ fontSize: 16, fontWeight: 500 }}>工业智能监控与诊断系统</div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {/* 通知图标 */}
             <Badge count={5} size="small">
               <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
             </Badge>
 
-            {/* 用户下拉菜单 */}
-            <Dropdown
-              menu={{ items: userMenuItems, onClick: handleMenuClick }}
-              placement="bottomRight"
-            >
+            <Dropdown menu={{ items: userMenuItems, onClick: handleMenuClick }} placement="bottomRight">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <Avatar icon={<UserOutlined />} />
-                <span>{user?.username || '用户'}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                  <span>{user?.username || '用户'}</span>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {user?.role || 'guest'}
+                  </Text>
+                </div>
               </div>
             </Dropdown>
           </div>
         </Header>
 
-        {/* 内容区域 */}
         {children}
       </Layout>
     </Layout>

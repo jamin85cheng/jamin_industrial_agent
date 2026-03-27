@@ -1,26 +1,20 @@
-/**
- * 认证状态管理
- * 
- * 使用 Zustand 进行状态管理
- */
-
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-interface User {
+export interface User {
   user_id: string
   username: string
-  email: string
+  email?: string
   role: string
+  roles: string[]
+  tenant_id?: string | null
+  permissions?: string[]
 }
 
 interface AuthState {
-  // 状态
   isAuthenticated: boolean
   token: string | null
   user: User | null
-  
-  // 方法
   login: (token: string, user: User) => void
   logout: () => void
   updateUser: (user: Partial<User>) => void
@@ -29,12 +23,9 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      // 初始状态
       isAuthenticated: false,
       token: null,
       user: null,
-
-      // 登录
       login: (token, user) => {
         set({
           isAuthenticated: true,
@@ -42,8 +33,6 @@ export const useAuthStore = create<AuthState>()(
           user,
         })
       },
-
-      // 登出
       logout: () => {
         set({
           isAuthenticated: false,
@@ -51,8 +40,6 @@ export const useAuthStore = create<AuthState>()(
           user: null,
         })
       },
-
-      // 更新用户信息
       updateUser: (userData) => {
         set((state) => ({
           user: state.user ? { ...state.user, ...userData } : null,
@@ -60,7 +47,7 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: 'auth-storage', // localStorage 键名
+      name: 'auth-storage',
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         token: state.token,

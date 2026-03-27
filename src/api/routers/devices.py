@@ -22,6 +22,73 @@ _devices = ThreadSafeDict()
 _device_tags = ThreadSafeDict()
 
 
+def init_default_devices():
+    """Initialize demo devices for local development and UI validation."""
+    if _devices.size() > 0:
+        return
+
+    now = datetime.utcnow()
+    demo_devices = [
+        {
+            "id": "DEV_AERATION_01",
+            "name": "1#曝气池",
+            "type": "s7",
+            "host": "192.168.1.100",
+            "port": 102,
+            "status": "online",
+            "last_seen": now,
+            "created_at": now,
+            "updated_at": now,
+            "tenant_id": "default",
+        },
+        {
+            "id": "DEV_AERATION_02",
+            "name": "2#曝气池",
+            "type": "s7",
+            "host": "192.168.1.101",
+            "port": 102,
+            "status": "online",
+            "last_seen": now,
+            "created_at": now,
+            "updated_at": now,
+            "tenant_id": "default",
+        },
+        {
+            "id": "DEV_BLOWER_01",
+            "name": "鼓风机",
+            "type": "modbus",
+            "host": "192.168.1.120",
+            "port": 502,
+            "status": "error",
+            "last_seen": now,
+            "created_at": now,
+            "updated_at": now,
+            "tenant_id": "default",
+        },
+    ]
+
+    demo_tags = {
+        "DEV_AERATION_01": [
+            {"name": "DO", "address": "DB1.DBW0", "data_type": "float", "unit": "mg/L"},
+            {"name": "pH", "address": "DB1.DBW2", "data_type": "float", "unit": ""},
+        ],
+        "DEV_AERATION_02": [
+            {"name": "DO", "address": "DB1.DBW4", "data_type": "float", "unit": "mg/L"},
+            {"name": "pH", "address": "DB1.DBW6", "data_type": "float", "unit": ""},
+        ],
+        "DEV_BLOWER_01": [
+            {"name": "current", "address": "40001", "data_type": "float", "unit": "A"},
+            {"name": "vibration", "address": "40002", "data_type": "float", "unit": "mm/s"},
+            {"name": "temperature", "address": "40003", "data_type": "float", "unit": "C"},
+        ],
+    }
+
+    for device in demo_devices:
+        device_id = device["id"]
+        _devices.set(device_id, device)
+        _device_tags.set(device_id, demo_tags.get(device_id, []))
+
+
 # Pydantic模型
 class DeviceTag(BaseModel):
     """设备点位"""

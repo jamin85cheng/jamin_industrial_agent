@@ -1,6 +1,6 @@
-# Miaota Industrial Agent - 多角色代码审查报告
+# Jamin Industrial Agent - 多角色代码审查报告
 
-> **版本**: v1.0.0-beta1  
+> **版本**: v1.0.0-beta2  
 > **审查日期**: 2026-03-26  
 > **审查团队**: 后端/数据库/安全/DevOps 联合审查
 
@@ -444,3 +444,4 @@ async def health_check():
 
 **审查团队**: 🔴后端开发 | 🗄️数据库 | 🔐安全 | ⚡DevOps  
 **报告日期**: 2026-03-26
+

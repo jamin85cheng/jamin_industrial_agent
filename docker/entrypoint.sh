@@ -4,8 +4,8 @@
 set -e
 
 echo "======================================"
-echo " Miaota Industrial Agent"
-echo " Version: v1.0.0-beta1"
+echo " Jamin Industrial Agent"
+echo " Version: v1.0.0-beta2"
 echo "======================================"
 
 # 环境检查
@@ -102,3 +102,4 @@ case "${1:-production}" in
         exit 1
         ;;
 esac
+

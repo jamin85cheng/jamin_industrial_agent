@@ -61,8 +61,8 @@ def get_default_config() -> Dict[str, Any]:
     """获取默认配置"""
     return {
         'project': {
-            'name': 'Miaota Industrial Agent',
-            'version': '0.1.0',
+            'name': 'Jamin Industrial Agent',
+            'version': 'v1.0.0-beta2',
             'environment': 'development'
         },
         'plc': {
@@ -96,3 +96,4 @@ if __name__ == "__main__":
     print(f"  项目名称：{config['project']['name']}")
     print(f"  PLC 地址：{config['plc']['host']}:{config['plc']['port']}")
     print(f"  采集频率：{config['plc']['scan_interval']}秒")
+

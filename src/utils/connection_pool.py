@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, List
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from loguru import logger
 
 
@@ -121,8 +122,11 @@ class ConnectionPool:
     def _create_connection(self) -> Optional[PooledConnection]:
         """创建新连接"""
         try:
+            db_path = Path(self.db_path)
+            if db_path.parent and str(db_path.parent) not in ("", "."):
+                db_path.parent.mkdir(parents=True, exist_ok=True)
             raw_conn = sqlite3.connect(
-                self.db_path,
+                str(db_path),
                 timeout=self.config.connection_timeout,
                 check_same_thread=False  # 允许跨线程使用
             )

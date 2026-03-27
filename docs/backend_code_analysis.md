@@ -1,4 +1,4 @@
-# Miaota Industrial Agent 后端代码分析说明
+﻿# Jamin Industrial Agent 后端代码分析说明
 
 ## 1. 文档目的
 
@@ -739,3 +739,4 @@ tests/
 - 重建测试
 
 做到这一步，这个仓库才会从“能力展示型项目”进入“可持续演进型后端工程”。
+

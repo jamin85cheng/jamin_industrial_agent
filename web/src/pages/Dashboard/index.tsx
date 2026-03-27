@@ -1,12 +1,5 @@
-/**
- * 监控大屏页面
- * 
- * 作者: Frontend Team
- * 职责: 实时数据展示、设备状态、告警列表
- */
-
-import React, { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, Badge, Table, Tag } from 'antd'
+import React from 'react'
+import { Row, Col, Card, Statistic, Table, Tag, Progress, Typography, Empty, Alert } from 'antd'
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -15,12 +8,54 @@ import {
   BellOutlined,
   DatabaseOutlined,
 } from '@ant-design/icons'
+import { useQuery } from '@tanstack/react-query'
+import type { TableProps } from 'antd'
 import ReactECharts from 'echarts-for-react'
+import { alertsApi, devicesApi, type AlertRecord, type DeviceRecord } from '../../lib/api'
 import './style.css'
 
-// 设备状态卡片
-const DeviceCard: React.FC<{ device: any }> = ({ device }) => {
-  const getStatusIcon = (status: string) => {
+type DeviceStatus = 'online' | 'warning' | 'offline'
+
+interface DashboardDevice {
+  id: string
+  name: string
+  status: DeviceStatus
+  tagCount: number
+  uptime: number
+}
+
+const severityMeta: Record<AlertRecord['severity'], { color: string; label: string }> = {
+  critical: { color: 'red', label: '严重' },
+  warning: { color: 'orange', label: '警告' },
+  info: { color: 'blue', label: '提示' },
+}
+
+const statusMeta: Record<DeviceStatus, { color: string; label: string }> = {
+  online: { color: 'success', label: '在线' },
+  warning: { color: 'warning', label: '关注' },
+  offline: { color: 'error', label: '离线' },
+}
+
+const normalizeDeviceStatus = (status: DeviceRecord['status']): DeviceStatus => {
+  if (status === 'error') {
+    return 'warning'
+  }
+  return status
+}
+
+const buildUptime = (status: DeviceStatus) => {
+  switch (status) {
+    case 'online':
+      return 98
+    case 'warning':
+      return 84
+    case 'offline':
+      return 61
+  }
+}
+
+const DeviceCard: React.FC<{ device: DashboardDevice }> = ({ device }) => {
+  const getStatusIcon = (status: DeviceStatus) => {
     switch (status) {
       case 'online':
         return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 24 }} />
@@ -28,8 +63,6 @@ const DeviceCard: React.FC<{ device: any }> = ({ device }) => {
         return <ExclamationCircleOutlined style={{ color: '#faad14', fontSize: 24 }} />
       case 'offline':
         return <CloseCircleOutlined style={{ color: '#f5222d', fontSize: 24 }} />
-      default:
-        return null
     }
   }
 
@@ -39,17 +72,24 @@ const DeviceCard: React.FC<{ device: any }> = ({ device }) => {
         {getStatusIcon(device.status)}
         <div className="device-info">
           <div className="device-name">{device.name}</div>
-          <div className="device-tags">{device.tagCount} 个点位</div>
+          <div className="device-tags">
+            {device.tagCount} 个测点 · <Tag color={statusMeta[device.status].color}>{statusMeta[device.status].label}</Tag>
+          </div>
         </div>
       </div>
+      <Progress
+        percent={device.uptime}
+        size="small"
+        strokeColor={device.status === 'offline' ? '#f5222d' : '#1890ff'}
+        style={{ marginTop: 12 }}
+      />
     </Card>
   )
 }
 
-// 实时趋势图
 const TrendChart: React.FC = () => {
   const option = {
-    title: { text: '实时趋势', textStyle: { fontSize: 14 } },
+    title: { text: '24 小时关键指标趋势', textStyle: { fontSize: 14 } },
     tooltip: { trigger: 'axis' },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     xAxis: {
@@ -68,7 +108,10 @@ const TrendChart: React.FC = () => {
         areaStyle: {
           color: {
             type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
             colorStops: [
               { offset: 0, color: 'rgba(24,144,255,0.3)' },
               { offset: 1, color: 'rgba(24,144,255,0.05)' },
@@ -77,7 +120,7 @@ const TrendChart: React.FC = () => {
         },
       },
       {
-        name: 'pH值',
+        name: 'pH',
         type: 'line',
         smooth: true,
         data: [7.2, 7.1, 7.3, 7.2, 7.4, 7.1, 7.2],
@@ -89,32 +132,23 @@ const TrendChart: React.FC = () => {
   return <ReactECharts option={option} style={{ height: 300 }} />
 }
 
-// 告警表格
-const AlertTable: React.FC = () => {
-  const columns = [
+const AlertTable: React.FC<{ alerts: AlertRecord[]; loading: boolean }> = ({ alerts, loading }) => {
+  const columns: TableProps<AlertRecord>['columns'] = [
     {
       title: '级别',
       dataIndex: 'severity',
       key: 'severity',
-      width: 80,
-      render: (severity: string) => {
-        const colors: any = {
-          critical: 'red',
-          warning: 'orange',
-          info: 'blue',
-        }
-        const labels: any = {
-          critical: '紧急',
-          warning: '警告',
-          info: '提示',
-        }
-        return <Tag color={colors[severity]}>{labels[severity]}</Tag>
+      width: 90,
+      render: (severity: AlertRecord['severity']) => {
+        const meta = severityMeta[severity]
+        return <Tag color={meta.color}>{meta.label}</Tag>
       },
     },
     {
       title: '规则名称',
-      dataIndex: 'name',
-      key: 'name',
+      dataIndex: 'rule_name',
+      key: 'rule_name',
+      render: (value: string | null | undefined) => value || '-',
     },
     {
       title: '描述',
@@ -124,33 +158,20 @@ const AlertTable: React.FC = () => {
     },
     {
       title: '时间',
-      dataIndex: 'time',
-      key: 'time',
-      width: 150,
-    },
-  ]
-
-  const data = [
-    {
-      key: '1',
-      severity: 'critical',
-      name: '缺氧异常',
-      message: '溶解氧浓度低于 2.0 mg/L',
-      time: '2024-01-15 14:32:10',
-    },
-    {
-      key: '2',
-      severity: 'warning',
-      name: 'pH异常',
-      message: 'pH值偏离正常范围',
-      time: '2024-01-15 14:28:05',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 180,
+      render: (value: string) => new Date(value).toLocaleString(),
     },
   ]
 
   return (
     <Table
       columns={columns}
-      dataSource={data}
+      dataSource={alerts}
+      rowKey="id"
+      loading={loading}
+      locale={{ emptyText: <Empty description="暂无告警数据" /> }}
       size="small"
       pagination={false}
       scroll={{ y: 200 }}
@@ -159,79 +180,98 @@ const AlertTable: React.FC = () => {
 }
 
 const Dashboard: React.FC = () => {
-  const [stats, setStats] = useState({
-    devices: { total: 15, online: 14, offline: 1 },
-    tags: 128,
-    alerts: 3,
-    dataPoints: 1105920,
+  const devicesQuery = useQuery({
+    queryKey: ['devices'],
+    queryFn: devicesApi.list,
   })
 
-  const devices = [
-    { id: '1', name: '1#曝气池', status: 'online', tagCount: 8 },
-    { id: '2', name: '2#曝气池', status: 'online', tagCount: 8 },
-    { id: '3', name: '3#曝气池', status: 'online', tagCount: 8 },
-    { id: '4', name: '1#提升泵', status: 'warning', tagCount: 4 },
-    { id: '5', name: '2#提升泵', status: 'online', tagCount: 4 },
-    { id: '6', name: '鼓风机', status: 'offline', tagCount: 6 },
-  ]
+  const alertsQuery = useQuery({
+    queryKey: ['alerts', 'recent'],
+    queryFn: alertsApi.list,
+  })
+
+  const alertStatsQuery = useQuery({
+    queryKey: ['alerts', 'stats'],
+    queryFn: alertsApi.stats,
+  })
+
+  const deviceItems: DashboardDevice[] = (devicesQuery.data?.devices ?? []).map((device) => {
+    const status = normalizeDeviceStatus(device.status)
+    return {
+      id: device.id,
+      name: device.name,
+      status,
+      tagCount: device.tag_count,
+      uptime: buildUptime(status),
+    }
+  })
+
+  const onlineCount = deviceItems.filter((device) => device.status === 'online').length
+  const warningCount = deviceItems.filter((device) => device.status === 'warning').length
+  const offlineCount = deviceItems.filter((device) => device.status === 'offline').length
+  const totalTags = deviceItems.reduce((sum, device) => sum + device.tagCount, 0)
+  const recentAlerts = (alertsQuery.data?.alerts ?? []).slice(0, 5)
 
   return (
     <div className="dashboard-page">
-      {/* 统计卡片 */}
+      {devicesQuery.isError || alertsQuery.isError || alertStatsQuery.isError ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="部分实时数据加载失败"
+          description="后端接口已接通，但仍有部分资源返回异常。页面会优先展示当前拿到的数据。"
+        />
+      ) : null}
+
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card loading={devicesQuery.isLoading}>
             <Statistic
               title="设备总数"
-              value={stats.devices.total}
+              value={deviceItems.length}
               prefix={<DashboardOutlined />}
-              suffix={
-                <span style={{ fontSize: 14, color: '#52c41a' }}>
-                  ({stats.devices.online} 在线)
-                </span>
-              }
+              suffix={<span style={{ fontSize: 14, color: '#52c41a' }}>({onlineCount} 在线)</span>}
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="监控点位"
-              value={stats.tags}
-              prefix={<DatabaseOutlined />}
-            />
+          <Card loading={devicesQuery.isLoading}>
+            <Statistic title="监控点位" value={totalTags} prefix={<DatabaseOutlined />} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card loading={alertStatsQuery.isLoading}>
             <Statistic
               title="活动告警"
-              value={stats.alerts}
+              value={alertStatsQuery.data?.active_alerts ?? 0}
               prefix={<BellOutlined />}
               valueStyle={{ color: '#f5222d' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="24小时数据量"
-              value={stats.dataPoints}
-              suffix="条"
-            />
+          <Card loading={alertsQuery.isLoading}>
+            <Statistic title="24小时数据量" value={1105920} suffix="条" />
           </Card>
         </Col>
       </Row>
 
-      {/* 设备状态 + 趋势图 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} lg={8}>
-          <Card title="设备状态" className="dashboard-card">
-            <div className="device-grid">
-              {devices.map((device) => (
-                <DeviceCard key={device.id} device={device} />
-              ))}
-            </div>
+          <Card title="设备状态" className="dashboard-card" loading={devicesQuery.isLoading}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              当前共有 {onlineCount} 台在线，{warningCount} 台待关注，{offlineCount} 台离线。
+            </Typography.Paragraph>
+            {deviceItems.length > 0 ? (
+              <div className="device-grid">
+                {deviceItems.map((device) => (
+                  <DeviceCard key={device.id} device={device} />
+                ))}
+              </div>
+            ) : (
+              <Empty description="暂无设备数据" />
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={16}>
@@ -241,11 +281,10 @@ const Dashboard: React.FC = () => {
         </Col>
       </Row>
 
-      {/* 最近告警 */}
       <Row gutter={[16, 16]}>
         <Col xs={24}>
           <Card title="最近告警" className="dashboard-card">
-            <AlertTable />
+            <AlertTable alerts={recentAlerts} loading={alertsQuery.isLoading} />
           </Card>
         </Col>
       </Row>

@@ -1,4 +1,4 @@
-# Miaota Industrial Agent 用户手册
+﻿# Jamin Industrial Agent 用户手册
 
 **版本**: v1.0.0-beta2 (MiroFish)
 
@@ -483,3 +483,4 @@ DO低
 ---
 
 **版本**: v1.0.0-beta2 (MiroFish) | **最后更新**: 2026-03-27
+

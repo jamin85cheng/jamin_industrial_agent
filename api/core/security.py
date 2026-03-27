@@ -102,7 +102,7 @@ class AuthService:
         "admin": {
             "user_id": "user_001",
             "username": "admin",
-            "email": "admin@miaota.ai",
+            "email": "admin@jamin.local",
             "hashed_password": pwd_context.hash("admin123"),
             "role": "admin",
             "permissions": ["*"],
@@ -111,7 +111,7 @@ class AuthService:
         "operator": {
             "user_id": "user_002",
             "username": "operator",
-            "email": "operator@miaota.ai",
+            "email": "operator@jamin.local",
             "hashed_password": pwd_context.hash("operator123"),
             "role": "operator",
             "permissions": ["data:read", "alerts:read", "alerts:ack"],
@@ -120,7 +120,7 @@ class AuthService:
         "viewer": {
             "user_id": "user_003",
             "username": "viewer",
-            "email": "viewer@miaota.ai",
+            "email": "viewer@jamin.local",
             "hashed_password": pwd_context.hash("viewer123"),
             "role": "viewer",
             "permissions": ["data:read", "dashboard:read"],

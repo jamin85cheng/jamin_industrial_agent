@@ -1,4 +1,4 @@
-"""
+﻿"""
 向量存储模块
 
 功能：
@@ -196,7 +196,7 @@ class ChromaVectorStore(VectorStore):
             # 获取或创建集合
             self.collection = self.client.get_or_create_collection(
                 name=self.collection_name,
-                metadata={"description": "Miaota Industrial Knowledge Base"}
+                metadata={"description": "Jamin Industrial Knowledge Base"}
             )
             
             logger.info(f"ChromaDB 就绪：{self.persist_directory}/{self.collection_name}")
@@ -577,3 +577,4 @@ if __name__ == "__main__":
                 print(f"  [{score:.3f}] {meta['text'][:60]}...")
     except Exception as e:
         print(f"ChromaDB 测试跳过：{e}")
+

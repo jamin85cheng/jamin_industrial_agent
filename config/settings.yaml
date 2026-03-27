@@ -2,8 +2,8 @@
 
 # ==================== 项目基础配置 ====================
 project:
-  name: "Miaota Industrial Agent"
-  version: "0.1.0"
+  name: "Jamin Industrial Agent"
+  version: "v1.0.0-beta2"
   environment: "development"  # development / production
 
 # ==================== PLC 数据采集配置 ====================
@@ -137,12 +137,12 @@ llm:
   
   # Ollama 配置 (推荐本地部署)
   ollama:
-    host: "http://localhost:11434"
-    model: "qwen2.5:3b"      # 轻量级中文模型
+    host: "http://192.168.0.6/v1"
+    model: "Qwen3.5-9B"      # 轻量级中文模型
   
   # Transformers 配置 (本地加载)
   transformers:
-    model_name: "Qwen/Qwen2.5-3B-Instruct"
+    model_name: "Qwen/Qwen3.5-2B"
     device: "cuda"           # cuda / cpu
     load_in_4bit: true       # 4bit 量化，节省显存
   
@@ -268,3 +268,4 @@ security:
       - "critical_alarm"
       - "communication_loss"
       - "manual_button"
+

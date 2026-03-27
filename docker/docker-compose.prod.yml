@@ -21,7 +21,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: production
-    image: miaota/industrial-agent:v1.0.0-beta1
+    image: miaota/industrial-agent:v1.0.0-beta2
     deploy:
       replicas: 3
       resources:

@@ -1,6 +1,6 @@
-# 项目状态报告
+﻿# 项目状态报告
 
-**项目**: Miaota Industrial Agent  
+**项目**: Jamin Industrial Agent  
 **当前版本**: v1.0.0-beta2 (MiroFish)  
 **报告日期**: 2026-03-27
 
@@ -238,7 +238,7 @@ miaota_industrial_agent/
 
 - **项目主页**: https://github.com/jamin85cheng/miaota_industrial_agent
 - **当前版本**: v1.0.0-beta2 (MiroFish)
-- **维护者**: Miaota Team
+- **维护者**: Jamin Cheng
 
 ---
 
@@ -246,3 +246,4 @@ miaota_industrial_agent/
 **质量**: ✅ 通过代码检查  
 **文档**: ✅ 完整  
 **推荐**: 🚀 可部署测试
+

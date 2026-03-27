@@ -1,12 +1,12 @@
-# Miaota Industrial Agent - 项目完整文档
+﻿# Jamin Industrial Agent - 项目完整文档
 
 ## 📋 项目概述
 
-**Miaota Industrial Agent** 是一个面向工业场景的智能监控与诊断系统，旨在通过 AI 技术实现工业设备的数字化感知、智能分析和自主决策。
+**Jamin Industrial Agent** 是一个面向工业场景的智能监控与诊断系统，旨在通过 AI 技术实现工业设备的数字化感知、智能分析和自主决策。
 
 ### 项目名称
 - **中文名**: 妙搭工业智能体
-- **英文名**: Miaota Industrial Agent
+- **英文名**: Jamin Industrial Agent
 - **代号**: 🦞 Lobster (龙虾)
 
 ### 核心理念
@@ -711,7 +711,7 @@ Closes #42
 ## 👥 团队与维护者
 
 - **创始人**: Jamin Cheng (jamin85cheng)
-- **核心开发**: Miaoda Team
+- **核心开发**: Jamin Cheng
 - **顾问**: 工业自动化领域专家
 
 ---
@@ -809,3 +809,4 @@ Closes #42
 *最后更新*: 2026-03-26  
 *版本*: v1.0.0  
 *状态*: Core Modules Complete (80%)
+

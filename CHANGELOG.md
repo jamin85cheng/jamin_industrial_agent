@@ -1,4 +1,4 @@
-# Miaota Industrial Agent 版本更新日志
+﻿# Jamin Industrial Agent 版本更新日志
 
 ## v1.0.0-beta2 (MiroFish) - 2026-03-27
 
@@ -252,5 +252,6 @@ migrations/                 # 数据库迁移
 
 ---
 
-**维护者**: Miaota Team
+**维护者**: Jamin Team
 **许可证**: MIT
+

@@ -1,7 +1,7 @@
 # Dockerfile - 多阶段构建
 # 
 # 构建生产镜像:
-#   docker build -f docker/Dockerfile -t miaota/industrial-agent:v1.0.0-beta1 .
+#   docker build -f docker/Dockerfile -t miaota/industrial-agent:v1.0.0-beta2 .
 
 # =================== 阶段1: 基础依赖 ===================
 FROM python:3.11-slim as base
@@ -118,6 +118,7 @@ COPY . .
 CMD ["pytest", "-v", "--cov=src", "--cov-report=html"]
 
 # =================== 元数据 ===================
-LABEL maintainer="Miaota Team <team@miaota.ai>" \
-      version="v1.0.0-beta1" \
-      description="Miaota Industrial Agent - 工业智能监控与诊断系统"
+LABEL maintainer="Jamin Cheng <jamin85cheng@users.noreply.github.com>" \
+      version="v1.0.0-beta2" \
+      description="Jamin Industrial Agent - 工业智能监控与诊断系统"
+

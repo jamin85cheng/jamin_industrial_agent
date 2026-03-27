@@ -1,4 +1,4 @@
-# 🦞 Miaota Industrial Agent - 核心模块开发完成！
+﻿# 🦞 Jamin Industrial Agent - 核心模块开发完成！
 
 ## ✅ 已完成的工作
 
@@ -381,3 +381,4 @@ git push -u origin main
 **恭喜！工业智能 Agent 框架已就绪！** 🦞🎉
 
 准备好开始你的工业智能化之旅了吗？
+

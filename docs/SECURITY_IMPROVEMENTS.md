@@ -1,6 +1,6 @@
-# Miaota Industrial Agent - 安全与健壮性改进报告
+# Jamin Industrial Agent - 安全与健壮性改进报告
 
-> **版本**: v1.0.0-beta1+security  
+> **版本**: v1.0.0-beta2  
 > **日期**: 2026-03-26  
 > **状态**: ✅ 已完成
 
@@ -402,3 +402,4 @@ monitoring:
 
 **审查团队**: 🔴后端 | 🗄️数据库 | 🔐安全 | ⚡DevOps  
 **完成日期**: 2026-03-26
+

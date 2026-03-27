@@ -1,4 +1,4 @@
-# Miaota Industrial Agent - 多角色并行开发计划
+﻿# Jamin Industrial Agent - 多角色并行开发计划
 
 > **版本**: v2.0 开发规划  
 > **更新时间**: 2026-03-26  
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
     await cleanup_services()
 
 app = FastAPI(
-    title="Miaota Industrial Agent API",
+    title="Jamin Industrial Agent API",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -510,3 +510,4 @@ main (保护分支)
 ---
 
 **准备好了吗？让我们开始多角色并行开发！** 🚀
+

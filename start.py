@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Project startup script.
 """
@@ -63,7 +63,7 @@ def flatten_collection_payload(data: dict) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Miaota Industrial Agent startup")
+    parser = argparse.ArgumentParser(description="Jamin Industrial Agent startup")
     parser.add_argument("--collect", action="store_true", help="Run collection only")
     parser.add_argument("--rules", action="store_true", help="Run rules only")
     parser.add_argument("--demo", action="store_true", help="Use simulated PLC data")
@@ -82,7 +82,7 @@ def main():
     args = parser.parse_args()
 
     setup_logging(args.log_level)
-    logger.info("Starting Miaota Industrial Agent")
+    logger.info("Starting Jamin Industrial Agent")
 
     try:
         config = load_yaml_config(args.config)
@@ -154,3 +154,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

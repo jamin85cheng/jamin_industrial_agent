@@ -1,53 +1,45 @@
-# 开发依赖
-# 用于开发、测试、代码质量检查
+-r requirements.txt
 
-# ============ 测试框架 ============
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
-pytest-xdist>=3.3.0
-pytest-timeout>=2.1.0
-pytest-mock>=3.11.0
+pytest-xdist>=3.5.0
+pytest-timeout>=2.3.0
+pytest-mock>=3.12.0
+locust>=2.24.0
 
-# ============ 代码质量 ============
-black>=23.7.0
-isort>=5.12.0
-flake8>=6.0.0
-pylint>=2.17.0
-mypy>=1.4.0
-bandit>=1.7.0
-safety>=2.3.0
+# Code quality
+black>=24.0.0
+isort>=5.13.0
+flake8>=7.0.0
+pylint>=3.0.0
+mypy>=1.8.0
+pre-commit>=3.6.0
+bandit>=1.7.7
+safety>=3.0.0
+semgrep>=1.60.0
 
-# ============ 类型检查 ============
-types-requests>=2.31.0
-types-pyyaml>=6.0.0
-types-python-dateutil>=2.8.0
+# Typing helpers
+types-PyYAML>=6.0.12.20241230
+types-python-dateutil>=2.9.0.20241206
 
-# ============ 文档工具 ============
-sphinx>=7.1.0
-sphinx-rtd-theme>=1.3.0
-sphinx-autodoc-typehints>=1.24.0
+# Documentation
+sphinx>=7.2.0
+sphinx-rtd-theme>=2.0.0
+sphinx-autodoc-typehints>=2.0.0
 
-# ============ 调试工具 ============
-ipython>=8.14.0
-ipdb>=0.13.0
-pudb>=2022.1.0
+# Debugging and profiling
+ipython>=8.20.0
+ipdb>=0.13.13
+pudb>=2024.1; platform_system != "Windows"
+memory-profiler>=0.61.0
+line-profiler>=4.1.2
+py-spy>=0.3.14
 
-# ============ 性能分析 ============
-memory-profiler>=0.60.0
-line-profiler>=4.1.0
-py-spy>=0.3.0
-
-# ============ 压力测试 ============
-locust>=2.15.0
-
-# ============ 容器工具 ============
-docker-compose>=1.29.0
-
-# ============ 安全测试 ============
-semgrep>=1.35.0
-trivy>=0.44.0
-
-# ============ Jupyter（数据分析） ============
+# Jupyter notebooks
 jupyter>=1.0.0
-notebook>=7.0.0
+notebook>=7.1.0
+
+# Non-Python tools such as Docker Compose and Trivy should be installed
+# from Docker/Desktop or the official binaries instead of pip.
