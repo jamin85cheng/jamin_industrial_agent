@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import (
@@ -15,6 +15,10 @@ from src.api.dependencies import (
 )
 
 router = APIRouter(prefix="/analysis", tags=["数据分析"])
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # Pydantic模型
@@ -175,7 +179,7 @@ async def analyze_trend(
     
     # 默认时间范围：过去24小时
     if not end_time:
-        end_time = datetime.utcnow()
+        end_time = utc_now()
     if not start_time:
         start_time = end_time - timedelta(hours=24)
     
@@ -264,7 +268,7 @@ async def forecast(
     base_value = 30.0
     trend_per_hour = 0.5
     
-    now = datetime.utcnow()
+    now = utc_now()
     
     for i in range(request.horizon):
         forecast_time = now + timedelta(hours=i)
@@ -319,7 +323,7 @@ async def get_statistics(
     
     # 默认时间范围
     if not end_time:
-        end_time = datetime.utcnow()
+        end_time = utc_now()
     if not start_time:
         start_time = end_time - timedelta(days=7)
     

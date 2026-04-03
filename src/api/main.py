@@ -21,9 +21,13 @@ from src.api.dependencies import (
 )
 from src.api.routers.alerts import init_default_alerts, init_default_rules
 from src.api.routers.devices import init_default_devices
+from src.utils.config import load_config
 from src.utils.health_check import init_default_checks
 from src.utils.structured_logging import get_logger
 logger = get_logger("api")
+config = load_config()
+cors_config = config.get("api", {}).get("cors", {})
+allow_origins = cors_config.get("origins", ["*"]) if cors_config.get("enabled", True) else []
 
 
 @asynccontextmanager
@@ -55,7 +59,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -228,7 +232,7 @@ async def get_version():
     return {
         "version": "v1.0.0-beta2",
         "codename": "",
-        "build_time": "2024-01-15",
+        "build_time": "2026-01-15",
         "git_commit": "beta2-docs-aligned",
         "python_version": "3.11+",
     }
@@ -240,8 +244,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "src.api.main:app",
         host="127.0.0.1",
-        port=8000,
+        port=8600,
         reload=True,
         log_level="info",
     )
-

@@ -27,7 +27,7 @@ const menuItems: MenuProps['items'] = [
   {
     key: '/dashboard',
     icon: <DashboardOutlined />,
-    label: '监控大屏',
+    label: '运营总览',
   },
   {
     key: '/alerts',
@@ -150,7 +150,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
               icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
               onClick={() => setCollapsed((current) => !current)}
             />
-            <div style={{ fontSize: 16, fontWeight: 500 }}>工业智能监控与诊断系统</div>
+            <div style={{ fontSize: 16, fontWeight: 500 }}>工业智能监控与诊断平台</div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

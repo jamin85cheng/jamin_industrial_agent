@@ -1,0 +1,194 @@
+﻿.diagnosis-studio {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.diagnosis-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 24px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(9, 105, 218, 0.12), rgba(16, 185, 129, 0.12));
+  border: 1px solid rgba(9, 105, 218, 0.14);
+}
+
+.studio-card {
+  border-radius: 20px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+  margin-bottom: 16px;
+}
+
+.highlight-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 249, 255, 0.96));
+}
+
+.switch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.switch-grid label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.runtime-tile {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.runtime-config-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  border: 1px solid #e2e8f0;
+  height: 100%;
+}
+
+.runtime-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.runtime-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.prompt-block {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.runtime-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.flow-stat {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.topology-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.topology-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+}
+
+.topology-column--experts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+
+.topology-node {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #dbe4ee;
+  background: #f8fafc;
+  min-height: 88px;
+}
+
+.topology-node--done {
+  background: linear-gradient(180deg, #ecfdf5, #f0fdf4);
+  border-color: #86efac;
+}
+
+.topology-node--running {
+  background: linear-gradient(180deg, #eff6ff, #f0f9ff);
+  border-color: #93c5fd;
+}
+
+.topology-node--pending {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-color: #dbe4ee;
+}
+
+.topology-node--off {
+  background: linear-gradient(180deg, #f8fafc, #f1f5f9);
+  border-color: #cbd5e1;
+  opacity: 0.72;
+}
+
+.agent-card {
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.compact-list {
+  margin: 6px 0 0 18px;
+}
+
+.compact-paragraph {
+  margin-bottom: 0;
+}
+
+@media (max-width: 992px) {
+  .diagnosis-hero {
+    flex-direction: column;
+  }
+
+  .switch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-tile {
+    flex-direction: column;
+  }
+
+  .runtime-header {
+    flex-direction: column;
+  }
+
+  .runtime-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topology-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topology-column--experts {
+    grid-template-columns: 1fr;
+  }
+}

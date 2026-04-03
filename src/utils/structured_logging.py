@@ -7,7 +7,7 @@ DevOps工程师修复: 统一结构化日志，支持敏感信息脱敏
 import json
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from enum import Enum
 from dataclasses import dataclass, asdict
@@ -15,6 +15,10 @@ from functools import wraps
 import hashlib
 import re
 from loguru import logger
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class LogLevel(Enum):
@@ -244,11 +248,11 @@ def log_execution(logger_instance: StructuredLogger, operation: str = ""):
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
             op_name = operation or func.__name__
-            start_time = datetime.utcnow()
+            start_time = utc_now()
             
             try:
                 result = func(*args, **kwargs)
-                duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                duration_ms = (utc_now() - start_time).total_seconds() * 1000
                 logger_instance.log_performance(
                     op_name,
                     duration_ms,
@@ -257,7 +261,7 @@ def log_execution(logger_instance: StructuredLogger, operation: str = ""):
                 return result
                 
             except Exception as e:
-                duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                duration_ms = (utc_now() - start_time).total_seconds() * 1000
                 logger_instance.error(
                     f"{op_name} 失败",
                     exception=e,
@@ -269,11 +273,11 @@ def log_execution(logger_instance: StructuredLogger, operation: str = ""):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
             op_name = operation or func.__name__
-            start_time = datetime.utcnow()
+            start_time = utc_now()
             
             try:
                 result = await func(*args, **kwargs)
-                duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                duration_ms = (utc_now() - start_time).total_seconds() * 1000
                 logger_instance.log_performance(
                     op_name,
                     duration_ms,
@@ -282,7 +286,7 @@ def log_execution(logger_instance: StructuredLogger, operation: str = ""):
                 return result
                 
             except Exception as e:
-                duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                duration_ms = (utc_now() - start_time).total_seconds() * 1000
                 logger_instance.error(
                     f"{op_name} 失败",
                     exception=e,

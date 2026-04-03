@@ -15,6 +15,9 @@ LLM 诊断模块
 """
 
 import json
+import urllib.request
+import urllib.error
+from urllib.parse import urljoin
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
@@ -130,43 +133,64 @@ class ChatGLMClient(LLMClient):
 class OpenAICompatibleClient(LLMClient):
     """OpenAI API 兼容客户端"""
     
-    def __init__(self, api_key: str, base_url: str, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: str, base_url: str, model: str = "gpt-3.5-turbo",
+                 timeout_seconds: int = 20):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
-        self.client = None
+        self.timeout_seconds = timeout_seconds
+        self.initialized = False
     
     def initialize(self) -> bool:
         """初始化客户端"""
         try:
-            from openai import OpenAI
-            
-            self.client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url
+            if not self.base_url:
+                raise ValueError("base_url 不能为空")
+
+            self.initialized = True
+            logger.info(
+                f"OpenAI 兼容客户端初始化成功，模型：{self.model}, URL: {self.base_url}"
             )
-            
-            logger.info(f"OpenAI 兼容客户端初始化成功，模型：{self.model}, URL: {self.base_url}")
             return True
-            
-        except ImportError:
-            logger.error("缺少 openai 依赖：pip install openai")
+
+        except Exception as e:
+            logger.error(f"OpenAI 兼容客户端初始化失败：{e}")
             return False
     
     def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """对话"""
-        if not self.client:
+        if not self.initialized:
             raise ValueError("客户端未初始化")
-        
+
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                **kwargs
+            payload = {
+                "model": kwargs.pop("model", self.model),
+                "messages": messages,
+                **kwargs,
+            }
+            request_body = json.dumps(payload).encode("utf-8")
+            request = urllib.request.Request(
+                urljoin(self.base_url.rstrip("/") + "/", "chat/completions"),
+                data=request_body,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
             )
-            
-            return response.choices[0].message.content
-            
+
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                response_data = json.loads(response.read().decode("utf-8"))
+
+            return response_data["choices"][0]["message"]["content"]
+
+        except urllib.error.HTTPError as e:
+            details = e.read().decode("utf-8", errors="ignore")
+            logger.error(f"API 调用失败：HTTP {e.code} - {details}")
+            return f"调用失败：HTTP {e.code}"
+        except urllib.error.URLError as e:
+            logger.error(f"API 调用失败：{e}")
+            return f"调用失败：{e}"
         except Exception as e:
             logger.error(f"API 调用失败：{e}")
             return f"调用失败：{e}"

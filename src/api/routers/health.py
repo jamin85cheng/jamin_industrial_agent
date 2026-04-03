@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter
@@ -23,6 +23,10 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 init_default_checks()
 health_checker = get_health_checker()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def _run_checks():
@@ -47,7 +51,7 @@ async def health_check():
 
     return {
         "status": overall.value,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "version": "v1.0.0-beta2",
         "response_time_ms": round((time.time() - started) * 1000, 2),
         "checks": {
@@ -94,7 +98,7 @@ async def detailed_health_check():
 
     return {
         "status": overall.value,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_now_iso(),
         "response_time_ms": round((time.time() - started) * 1000, 2),
         "system": system_info,
         "components": {

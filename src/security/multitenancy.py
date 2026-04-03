@@ -6,7 +6,7 @@
 
 from typing import Optional, Dict, List, Any, Set
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import uuid
 
@@ -14,6 +14,10 @@ from src.utils.structured_logging import get_logger
 from src.utils.thread_safe import ThreadSafeDict
 
 logger = get_logger("multitenancy")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class TenantStatus(Enum):
@@ -61,7 +65,7 @@ class TenantUsage:
     storage_gb: float = 0.0
     api_calls_today: int = 0
     alerts_today: int = 0
-    last_updated: datetime = field(default_factory=datetime.utcnow)
+    last_updated: datetime = field(default_factory=utc_now)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -81,7 +85,7 @@ class Tenant:
     name: str
     domain: Optional[str] = None
     status: TenantStatus = TenantStatus.ACTIVE
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
     expires_at: Optional[datetime] = None
     quota: TenantQuota = field(default_factory=TenantQuota)
     usage: TenantUsage = field(default_factory=TenantUsage)
@@ -92,7 +96,7 @@ class Tenant:
         """检查租户是否有效"""
         if self.status != TenantStatus.ACTIVE:
             return False
-        if self.expires_at and datetime.utcnow() > self.expires_at:
+        if self.expires_at and utc_now() > self.expires_at:
             return False
         return True
     
@@ -121,7 +125,7 @@ class Tenant:
         elif resource_type == "alerts":
             self.usage.alerts_today += amount
         
-        self.usage.last_updated = datetime.utcnow()
+        self.usage.last_updated = utc_now()
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -286,7 +290,7 @@ class TenantManager:
         
         tenant.status = TenantStatus.SUSPENDED
         tenant.settings["suspension_reason"] = reason
-        tenant.settings["suspended_at"] = datetime.utcnow().isoformat()
+        tenant.settings["suspended_at"] = utc_now().isoformat()
         
         self._tenants.set(tenant_id, tenant)
         logger.warning(f"租户已暂停: {tenant_id} - 原因: {reason}")

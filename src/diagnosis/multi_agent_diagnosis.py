@@ -1,16 +1,19 @@
-"""
-多智能体协同诊断系统
+"""Multi-agent diagnosis engine with runtime visibility."""
 
-参考群体智能协作思路实现的多专家诊断引擎
-"""
+from __future__ import annotations
 
 import asyncio
-from typing import List, Dict, Any, Optional, Callable
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
 import json
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
+from src.knowledge.graph_rag import graph_rag
+from src.models.agent_model_router import AgentModelProfile, AgentModelRouter
 from src.utils.structured_logging import get_logger
 from src.utils.thread_safe import ThreadSafeDict
 
@@ -18,27 +21,32 @@ logger = get_logger("multi_agent_diagnosis")
 
 
 class ExpertType(Enum):
-    """专家类型"""
-    MECHANICAL = "mechanical"      # 机械专家
-    ELECTRICAL = "electrical"      # 电气专家
-    PROCESS = "process"            # 工艺专家
-    SENSOR = "sensor"              # 传感器专家
-    HISTORICAL = "historical"      # 历史案例专家
-    COORDINATOR = "coordinator"    # 协调者
+    MECHANICAL = "mechanical"
+    ELECTRICAL = "electrical"
+    PROCESS = "process"
+    SENSOR = "sensor"
+    HISTORICAL = "historical"
+    COORDINATOR = "coordinator"
 
 
 @dataclass
 class ExpertOpinion:
-    """专家意见"""
     expert_type: ExpertType
     expert_name: str
-    confidence: float              # 0-1
+    confidence: float
     root_cause: str
     evidence: List[str]
     suggestions: List[str]
-    reasoning: str                 # 推理过程
+    reasoning: str
+    model_name: Optional[str] = None
+    llm_attempted: bool = False
+    llm_used: bool = False
+    used_fallback: bool = False
+    fallback_reason: Optional[str] = None
+    response_excerpt: Optional[str] = None
+    duration_ms: Optional[float] = None
     timestamp: datetime = field(default_factory=datetime.utcnow)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "expert_type": self.expert_type.value,
@@ -48,603 +56,675 @@ class ExpertOpinion:
             "evidence": self.evidence,
             "suggestions": self.suggestions,
             "reasoning": self.reasoning,
-            "timestamp": self.timestamp.isoformat()
+            "model_name": self.model_name,
+            "llm_attempted": self.llm_attempted,
+            "llm_used": self.llm_used,
+            "used_fallback": self.used_fallback,
+            "fallback_reason": self.fallback_reason,
+            "response_excerpt": self.response_excerpt,
+            "duration_ms": self.duration_ms,
+            "timestamp": self.timestamp.isoformat(),
         }
 
 
 @dataclass
 class MultiAgentDiagnosisResult:
-    """多智能体诊断结果"""
     diagnosis_id: str
     symptoms: str
     final_conclusion: str
     confidence: float
-    consensus_level: float         # 专家一致性程度
+    consensus_level: float
     expert_opinions: List[ExpertOpinion]
-    dissenting_views: List[ExpertOpinion]  # 不同意见
+    dissenting_views: List[ExpertOpinion]
     recommended_actions: List[Dict[str, Any]]
     spare_parts: List[Dict[str, Any]]
     related_cases: List[str]
     simulation_scenarios: List[Dict[str, Any]]
+    agent_model_map: Dict[str, Dict[str, Any]]
+    fallback_summary: Dict[str, Any]
+    coordinator_metadata: Dict[str, Any]
+    debug_metadata: Dict[str, Any] = field(default_factory=dict)
     generated_at: datetime = field(default_factory=datetime.utcnow)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
+
+    def to_dict(self, include_debug: bool = False) -> Dict[str, Any]:
+        payload = {
             "diagnosis_id": self.diagnosis_id,
             "symptoms": self.symptoms,
             "final_conclusion": self.final_conclusion,
             "confidence": self.confidence,
             "consensus_level": self.consensus_level,
-            "expert_opinions": [op.to_dict() for op in self.expert_opinions],
-            "dissenting_views": [op.to_dict() for op in self.dissenting_views],
+            "expert_opinions": [item.to_dict() for item in self.expert_opinions],
+            "dissenting_views": [item.to_dict() for item in self.dissenting_views],
             "recommended_actions": self.recommended_actions,
             "spare_parts": self.spare_parts,
             "related_cases": self.related_cases,
             "simulation_scenarios": self.simulation_scenarios,
-            "generated_at": self.generated_at.isoformat()
+            "agent_model_map": self.agent_model_map,
+            "fallback_summary": self.fallback_summary,
+            "coordinator_metadata": self.coordinator_metadata,
+            "generated_at": self.generated_at.isoformat(),
         }
+        if include_debug:
+            payload["debug"] = self.debug_metadata
+        return payload
 
 
 class LLMExpertAgent:
-    """LLM驱动的专家智能体"""
-    
-    def __init__(self, expert_type: ExpertType, name: str, system_prompt: str, llm_client=None):
+    output_contract = {
+        "type": "json",
+        "required_fields": ["confidence", "root_cause", "evidence", "suggestions", "reasoning"],
+    }
+
+    def __init__(
+        self,
+        expert_type: ExpertType,
+        name: str,
+        description: str,
+        capabilities: List[str],
+        system_prompt: str,
+        llm_client: Any = None,
+        model_profile: Optional[AgentModelProfile] = None,
+    ):
         self.expert_type = expert_type
         self.name = name
+        self.description = description
+        self.capabilities = capabilities
         self.system_prompt = system_prompt
         self.llm_client = llm_client
-        self.memory = []  # 对话历史
-        
-    async def analyze(self, symptoms: str, sensor_data: Dict[str, Any], 
-                     context: Dict[str, Any] = None) -> ExpertOpinion:
-        """
-        分析问题并给出专业意见
-        
-        Args:
-            symptoms: 症状描述
-            sensor_data: 传感器数据
-            context: 额外上下文
-        
-        Returns:
-            ExpertOpinion: 专家意见
-        """
-        # 构建提示词
+        self.model_profile = model_profile
+
+    @property
+    def model_name(self) -> Optional[str]:
+        return self.model_profile.model if self.model_profile else None
+
+    async def analyze(
+        self,
+        symptoms: str,
+        sensor_data: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ExpertOpinion:
+        context = context or {}
         prompt = self._build_prompt(symptoms, sensor_data, context)
-        
-        # 调用LLM
+        if not self.llm_client:
+            return self._heuristic_opinion(symptoms, sensor_data, context)
+
         try:
             response = await self._call_llm(prompt)
-            opinion = self._parse_response(response)
-            opinion.expert_type = self.expert_type
-            opinion.expert_name = self.name
-            return opinion
-        except Exception as e:
-            logger.error(f"专家 {self.name} 分析失败: {e}")
-            return self._create_fallback_opinion(symptoms)
-    
-    def _build_prompt(self, symptoms: str, sensor_data: Dict[str, Any], 
-                     context: Dict[str, Any] = None) -> str:
-        """构建提示词"""
-        prompt = f"""{self.system_prompt}
-
-## 当前故障症状
-{symptoms}
-
-## 传感器数据
-{json.dumps(sensor_data, indent=2, ensure_ascii=False)}
-
-"""
-        if context:
-            prompt += f"""## 额外上下文
-{json.dumps(context, indent=2, ensure_ascii=False)}
-
-"""
-        
-        prompt += """## 输出要求
-请按以下JSON格式输出诊断意见：
-{
-    "confidence": 0.85,
-    "root_cause": "根因描述",
-    "evidence": ["证据1", "证据2"],
-    "suggestions": ["建议1", "建议2"],
-    "reasoning": "详细的推理过程"
-}
-"""
-        return prompt
-    
-    async def _call_llm(self, prompt: str) -> str:
-        """调用LLM（简化版，实际应调用真实LLM API）"""
-        # 这里使用模拟响应，实际应调用OpenAI/Claude等API
-        return self._generate_mock_response(prompt)
-    
-    def _generate_mock_response(self, prompt: str) -> str:
-        """生成模拟响应（用于演示）"""
-        # 根据专家类型返回不同的模拟响应
-        mock_responses = {
-            ExpertType.MECHANICAL: {
-                "confidence": 0.82,
-                "root_cause": "曝气盘部分堵塞，导致曝气效率下降40%",
-                "evidence": [
-                    "振动频谱分析显示异常峰值在轴承特征频率处",
-                    "温度梯度变化符合机械磨损模式"
-                ],
-                "suggestions": [
-                    "检查并清洗曝气盘",
-                    "检查风机叶轮是否平衡",
-                    "更换老化机械密封"
-                ],
-                "reasoning": "通过振动频谱分析，发现..."
-            },
-            ExpertType.ELECTRICAL: {
-                "confidence": 0.75,
-                "root_cause": "电机绝缘老化，电流不平衡度超过15%",
-                "evidence": [
-                    "三相电流不平衡度：A相12.5A, B相11.8A, C相13.2A",
-                    "绝缘电阻测试值低于标准阈值"
-                ],
-                "suggestions": [
-                    "进行电机绝缘处理或更换",
-                    "检查供电电压稳定性",
-                    "调整变频器参数"
-                ],
-                "reasoning": "电流不平衡度计算显示..."
-            },
-            ExpertType.PROCESS: {
-                "confidence": 0.88,
-                "root_cause": "污泥龄过长导致污泥活性下降",
-                "evidence": [
-                    "污泥浓度(MLSS)持续高于4000mg/L",
-                    "污泥体积指数(SVI)超过200mL/g"
-                ],
-                "suggestions": [
-                    "加大排泥量，控制污泥龄在15-20天",
-                    "调整进水负荷分配",
-                    "考虑添加营养剂"
-                ],
-                "reasoning": "根据活性污泥法原理..."
-            },
-            ExpertType.SENSOR: {
-                "confidence": 0.90,
-                "root_cause": "DO传感器探头污染导致读数漂移",
-                "evidence": [
-                    "DO读数与理论计算值偏差超过20%",
-                    "传感器校准记录已超期30天"
-                ],
-                "suggestions": [
-                    "清洗并校准DO传感器",
-                    "建立定期维护计划",
-                    "考虑增加冗余传感器"
-                ],
-                "reasoning": "传感器数据分析显示..."
-            },
-            ExpertType.HISTORICAL: {
-                "confidence": 0.70,
-                "root_cause": "与2023-08-15案例相似，疑似进水负荷冲击",
-                "evidence": [
-                    "历史相似度匹配得分0.85",
-                    "相同时间段出现相似症状"
-                ],
-                "suggestions": [
-                    "参考历史案例处理方法",
-                    "加强进水水质监测",
-                    "准备应急处理方案"
-                ],
-                "reasoning": "基于知识图谱相似度匹配..."
-            }
-        }
-        
-        response = mock_responses.get(self.expert_type, mock_responses[ExpertType.MECHANICAL])
-        return json.dumps(response, ensure_ascii=False)
-    
-    def _parse_response(self, response: str) -> ExpertOpinion:
-        """解析LLM响应"""
-        try:
-            data = json.loads(response)
-            return ExpertOpinion(
+            payload = self._extract_json(response)
+            opinion = ExpertOpinion(
                 expert_type=self.expert_type,
                 expert_name=self.name,
-                confidence=data.get("confidence", 0.5),
-                root_cause=data.get("root_cause", "未知"),
-                evidence=data.get("evidence", []),
-                suggestions=data.get("suggestions", []),
-                reasoning=data.get("reasoning", "")
+                confidence=float(payload.get("confidence", 0.65)),
+                root_cause=str(payload.get("root_cause") or self._heuristic_payload(symptoms, sensor_data, context)["root_cause"]),
+                evidence=[str(item) for item in payload.get("evidence", [])][:4],
+                suggestions=[str(item) for item in payload.get("suggestions", [])][:4],
+                reasoning=str(payload.get("reasoning", "")).strip()[:500] or "模型返回了简短结论。",
+                model_name=self.model_name,
+                llm_attempted=True,
+                llm_used=True,
+                used_fallback=False,
+                response_excerpt=str(response).strip()[:240],
             )
-        except json.JSONDecodeError:
-            return self._create_fallback_opinion(response)
-    
-    def _create_fallback_opinion(self, symptoms: str) -> ExpertOpinion:
-        """创建默认意见（失败时使用）"""
+            if not opinion.evidence or not opinion.suggestions:
+                raise ValueError("missing evidence or suggestions")
+            return opinion
+        except Exception as exc:
+            fallback = self._heuristic_opinion(symptoms, sensor_data, context)
+            fallback.llm_attempted = True
+            fallback.used_fallback = True
+            fallback.fallback_reason = str(exc)
+            return fallback
+
+    def to_runtime_dict(self) -> Dict[str, Any]:
+        profile = self.model_profile
+        return {
+            "expert_name": self.name,
+            "description": self.description,
+            "capabilities": self.capabilities,
+            "route_key": self.expert_type.value,
+            "model_name": self.model_name,
+            "llm_enabled": bool(self.llm_client),
+            "endpoint": profile.endpoint if profile else None,
+            "temperature": profile.temperature if profile else None,
+            "max_tokens": profile.max_tokens if profile else None,
+            "timeout_seconds": profile.timeout_seconds if profile else None,
+            "prompt_summary": self.system_prompt.splitlines()[0].strip(),
+            "system_prompt": self.system_prompt,
+            "output_contract": self.output_contract,
+        }
+
+    def _build_prompt(self, symptoms: str, sensor_data: Dict[str, Any], context: Dict[str, Any]) -> str:
+        return "\n".join(
+            [
+                self.system_prompt,
+                "只输出一个 JSON 对象，不要 markdown，不要解释。",
+                f"故障现象: {symptoms}",
+                f"传感器数据: {json.dumps(sensor_data, ensure_ascii=False)}",
+                f"上下文: {json.dumps(self._slim_context(context), ensure_ascii=False)}",
+                "JSON fields: confidence, root_cause, evidence, suggestions, reasoning",
+            ]
+        )
+
+    async def _call_llm(self, prompt: str) -> str:
+        if hasattr(self.llm_client, "complete"):
+            return await asyncio.to_thread(
+                self.llm_client.complete,
+                prompt,
+                temperature=self.model_profile.temperature if self.model_profile else 0.2,
+                max_tokens=self.model_profile.max_tokens if self.model_profile else 512,
+            )
+        raise ValueError("unsupported llm client")
+
+    def _extract_json(self, raw_text: str) -> Dict[str, Any]:
+        text = str(raw_text).strip()
+        text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise ValueError("no json object found")
+        payload = json.loads(match.group(0))
+        if not payload.get("root_cause"):
+            raise ValueError("missing root_cause")
+        return payload
+
+    def _slim_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "graph_rag_query": context.get("graph_rag_query"),
+            "graph_rag_sources": context.get("graph_rag_summary", {}).get("sources"),
+            "device_id": context.get("device_id"),
+        }
+
+    def _heuristic_opinion(self, symptoms: str, sensor_data: Dict[str, Any], context: Dict[str, Any]) -> ExpertOpinion:
+        payload = self._heuristic_payload(symptoms, sensor_data, context)
         return ExpertOpinion(
             expert_type=self.expert_type,
             expert_name=self.name,
-            confidence=0.3,
-            root_cause="无法确定根因",
-            evidence=["数据不足"],
-            suggestions=["请提供更多数据", "联系技术支持"],
-            reasoning="分析过程中出现错误"
+            confidence=payload["confidence"],
+            root_cause=payload["root_cause"],
+            evidence=payload["evidence"],
+            suggestions=payload["suggestions"],
+            reasoning=payload["reasoning"],
+            model_name=self.model_name,
+            llm_attempted=False,
+            llm_used=False,
+            used_fallback=False,
+            response_excerpt=payload["reasoning"][:160],
         )
+
+    def _heuristic_payload(self, symptoms: str, sensor_data: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        do_value = float(sensor_data.get("do", 0) or 0)
+        vibration = float(sensor_data.get("vibration", 0) or 0)
+        current = float(sensor_data.get("current", 0) or 0)
+        graph_summary = context.get("graph_rag_summary", {})
+
+        if self.expert_type == ExpertType.MECHANICAL:
+            return {
+                "confidence": 0.82,
+                "root_cause": "风机轴承磨损或曝气盘局部堵塞",
+                "evidence": [f"振动值 {vibration} 偏高", "异常噪声与旋转设备劣化特征一致"],
+                "suggestions": ["检查风机轴承与转子平衡", "清洗曝气盘并复核风量"],
+                "reasoning": "机械侧优先怀疑旋转部件磨损和气路堵塞。",
+            }
+        if self.expert_type == ExpertType.ELECTRICAL:
+            return {
+                "confidence": 0.74,
+                "root_cause": "电机负载偏高或供电不平衡",
+                "evidence": [f"电流值 {current} 偏高", "异常噪声可能由负载波动放大"],
+                "suggestions": ["检查三相电流与电压平衡", "复核变频器参数"],
+                "reasoning": "电气侧从高电流和负载波动判断驱动链存在压力。",
+            }
+        if self.expert_type == ExpertType.PROCESS:
+            return {
+                "confidence": 0.86,
+                "root_cause": "曝气效率下降导致溶解氧不足",
+                "evidence": [f"DO 值 {do_value} 偏低", "症状描述直接指向曝气工艺不足"],
+                "suggestions": ["提高排查优先级并确认实际供氧量", "检查污泥负荷与曝气分配"],
+                "reasoning": "工艺侧认为供氧不足是当前最直接的生产风险。",
+            }
+        if self.expert_type == ExpertType.SENSOR:
+            return {
+                "confidence": 0.90,
+                "root_cause": "DO 传感器可能存在污染或漂移",
+                "evidence": ["低 DO 读数需要先校验仪表可信度", "在线仪表污染会放大误判风险"],
+                "suggestions": ["清洗并校准 DO 传感器", "对比人工采样结果"],
+                "reasoning": "仪表侧先确认数据是否可信，避免误调工艺。",
+            }
+        return {
+            "confidence": 0.71,
+            "root_cause": "历史案例显示曝气系统劣化与进氧链路异常高度相关",
+            "evidence": [
+                f"GraphRAG 相关源: {', '.join(graph_summary.get('sources', ['CASE_20230815_001']))}",
+                "GraphRAG 匹配到曝气异常历史案例",
+            ],
+            "suggestions": ["参考历史案例先排查曝气盘与风机", "同步核查近期进水负荷变化"],
+            "reasoning": "历史案例和图谱信息支持先从曝气链路着手。",
+        }
 
 
 class MultiAgentDiagnosisEngine:
-    """
-    多智能体协同诊断引擎
-    
-    模拟多个领域专家协作诊断的过程
-    """
-    
-    def __init__(self, llm_client=None):
+    def __init__(
+        self,
+        llm_client: Any = None,
+        model_router: Optional[AgentModelRouter] = None,
+        enable_model_routing: Optional[bool] = None,
+    ):
+        self.model_router = model_router or AgentModelRouter()
+        self.enable_model_routing = bool(self.model_router.enabled) if enable_model_routing is None else enable_model_routing
         self.llm_client = llm_client
         self.experts: Dict[ExpertType, LLMExpertAgent] = {}
         self.coordinator: Optional[LLMExpertAgent] = None
-        self._init_experts()
-        
-        # 诊断历史
         self._diagnosis_history = ThreadSafeDict()
-    
-    def _init_experts(self):
-        """初始化专家团队"""
-        experts_config = [
-            {
-                "type": ExpertType.MECHANICAL,
-                "name": "机械故障诊断专家",
-                "prompt": """你是资深的机械设备故障诊断专家，拥有20年旋转机械维护经验。
+        self._init_experts()
 
-你的专长包括：
-- 振动分析与频谱诊断
-- 轴承故障模式识别
-- 机械密封失效分析
-- 动平衡与对中问题
-
-分析时请重点关注：
-1. 振动频谱特征
-2. 温度分布异常
-3. 磨损模式识别
-4. 机械间隙变化
-
-给出意见时请明确：
-- 故障概率评估
-- 发展速度与风险评估
-- 维修紧急程度
-"""
-            },
-            {
-                "type": ExpertType.ELECTRICAL,
-                "name": "电气系统诊断专家",
-                "prompt": """你是电气系统诊断专家，精通电机驱动与控制系统。
-
-你的专长包括：
-- 三相电流不平衡分析
-- 电机绝缘状态评估
-- 变频器故障诊断
-- 电气保护系统分析
-
-分析时请重点关注：
-1. 电流电压波形异常
-2. 绝缘电阻趋势
-3. 谐波畸变率
-4. 保护装置动作记录
-
-给出意见时请明确：
-- 电气安全风险等级
-- 对生产的影响程度
-- 建议停电检查项目
-"""
-            },
-            {
-                "type": ExpertType.PROCESS,
-                "name": "工艺分析专家",
-                "prompt": """你是污水处理工艺专家，精通活性污泥法工艺控制。
-
-你的专长包括：
-- 污泥龄(SRT)优化
-- 溶解氧(DO)控制策略
-- 营养物平衡分析
-- 污泥沉降性能评估
-
-分析时请重点关注：
-1. 污泥浓度(MLSS/MLVSS)
-2. 沉降比(SV30)和SVI
-3. 食微比(F/M)
-4. 营养比(BOD:N:P)
-
-给出意见时请明确：
-- 工艺调整方向
-- 参数优化建议
-- 出水达标风险评估
-"""
-            },
-            {
-                "type": ExpertType.SENSOR,
-                "name": "传感器与仪表专家",
-                "prompt": """你是工业自动化仪表专家，精通各类传感器故障诊断。
-
-你的专长包括：
-- 在线分析仪表校准
-- 传感器漂移诊断
-- 信号干扰分析
-- 测量系统不确定度评估
-
-分析时请重点关注：
-1. 测量值合理性检查
-2. 传感器校准状态
-3. 信号噪声分析
-4. 仪表响应时间
-
-给出意见时请明确：
-- 传感器是否需要校准/更换
-- 测量数据可信度
-- 建议的仪表维护措施
-"""
-            },
-            {
-                "type": ExpertType.HISTORICAL,
-                "name": "历史案例匹配专家",
-                "prompt": """你是知识管理专家，擅长从历史案例中识别相似模式。
-
-你的专长包括：
-- 故障案例库检索
-- 相似度计算与匹配
-- 历史处理效果评估
-- 知识图谱推理
-
-分析时请重点关注：
-1. 症状相似度匹配
-2. 处理方案有效性
-3. 历史处理时间线
-4. 复发风险评估
-
-给出意见时请明确：
-- 最相似的历史案例
-- 参考的处理方案
-- 预期恢复时间
-"""
-            }
+    def _init_experts(self) -> None:
+        expert_configs = [
+            (
+                ExpertType.MECHANICAL,
+                "机械故障诊断专家",
+                "聚焦旋转设备、轴承、曝气盘与气路堵塞。",
+                ["振动分析", "轴承诊断", "动平衡"],
+                "你是机械故障诊断专家，负责判断风机、轴承、曝气盘等机械部件问题。",
+            ),
+            (
+                ExpertType.ELECTRICAL,
+                "电气系统诊断专家",
+                "聚焦电机、供电稳定性与驱动控制。",
+                ["电机诊断", "绝缘测试", "变频控制"],
+                "你是电气系统诊断专家，负责判断电机负载、供电和变频控制问题。",
+            ),
+            (
+                ExpertType.PROCESS,
+                "工艺分析专家",
+                "聚焦供氧效率、污泥负荷和工艺参数。",
+                ["工艺优化", "参数调整", "水质分析"],
+                "你是污水处理工艺专家，负责判断曝气效率和运行参数问题。",
+            ),
+            (
+                ExpertType.SENSOR,
+                "传感器与仪表专家",
+                "聚焦 DO 传感器、校准和测量可信度。",
+                ["仪表校准", "漂移诊断", "信号分析"],
+                "你是工业仪表专家，负责判断在线传感器污染、漂移和校准问题。",
+            ),
+            (
+                ExpertType.HISTORICAL,
+                "历史案例匹配专家",
+                "聚焦历史案例、知识图谱和故障复盘。",
+                ["案例匹配", "知识检索", "处置复盘"],
+                "你是历史案例匹配专家，负责利用 GraphRAG 和历史工单寻找相似故障。",
+            ),
         ]
-        
-        for config in experts_config:
-            expert = LLMExpertAgent(
-                expert_type=config["type"],
-                name=config["name"],
-                system_prompt=config["prompt"],
-                llm_client=self.llm_client
+        for expert_type, name, description, capabilities, prompt in expert_configs:
+            self.experts[expert_type] = LLMExpertAgent(
+                expert_type=expert_type,
+                name=name,
+                description=description,
+                capabilities=capabilities,
+                system_prompt=prompt,
+                llm_client=self._get_client(expert_type.value),
+                model_profile=self._get_profile(expert_type.value),
             )
-            self.experts[config["type"]] = expert
-        
-        # 初始化协调者
+
         self.coordinator = LLMExpertAgent(
             expert_type=ExpertType.COORDINATOR,
             name="诊断协调专家",
-            system_prompt="""你是诊断协调专家，负责整合多位专家的意见形成最终诊断结论。
-
-你的职责：
-1. 分析各专家意见的共识与分歧
-2. 识别高置信度的结论
-3. 整合形成一致的处理建议
-4. 明确标注不确定性和风险
-
-输出要求：
-- 最终根因结论（综合各专家意见）
-- 置信度评估
-- 共识程度说明
-- 分步处理建议（按优先级排序）
-- 需要的备件清单
-- 风险评估
-""",
-            llm_client=self.llm_client
+            description="负责整合多专家意见，形成最终结论和处置优先级。",
+            capabilities=["意见整合", "冲突化解", "报告生成"],
+            system_prompt="你是诊断协调专家，需要整合多位专家意见并形成统一结论。",
+            llm_client=self._get_client("coordinator"),
+            model_profile=self._get_profile("coordinator"),
         )
-    
-    async def diagnose(self, symptoms: str, sensor_data: Dict[str, Any],
-                      context: Dict[str, Any] = None) -> MultiAgentDiagnosisResult:
-        """
-        执行多智能体协同诊断
-        
-        Args:
-            symptoms: 症状描述
-            sensor_data: 传感器数据
-            context: 额外上下文
-        
-        Returns:
-            MultiAgentDiagnosisResult: 诊断结果
-        """
-        import uuid
-        
+
+    def _get_profile(self, route_key: str) -> Optional[AgentModelProfile]:
+        return self.model_router.get_profile(route_key) if self.enable_model_routing and self.model_router else None
+
+    def _get_client(self, route_key: str) -> Any:
+        return self.model_router.get_client(route_key) if self.enable_model_routing and self.model_router else self.llm_client
+
+    async def diagnose(
+        self,
+        symptoms: str,
+        sensor_data: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        trace_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> MultiAgentDiagnosisResult:
+        context = dict(context or {})
         diagnosis_id = f"MAD_{uuid.uuid4().hex[:12].upper()}"
-        logger.info(f"开始多智能体诊断: {diagnosis_id}")
-        
-        # 1. 并行收集各专家意见
-        expert_tasks = [
-            expert.analyze(symptoms, sensor_data, context)
-            for expert in self.experts.values()
-        ]
-        
-        expert_opinions = await asyncio.gather(*expert_tasks)
-        
-        # 2. 协调者整合意见
-        final_conclusion = await self._coordinate_opinions(
-            symptoms, expert_opinions
+        execution_trace: List[Dict[str, Any]] = []
+        started_at = time.perf_counter()
+
+        def emit(stage: str, message: str, **extra: Any) -> None:
+            event = {"stage": stage, "message": message, "timestamp": datetime.now(timezone.utc).isoformat(), **extra}
+            execution_trace.append(event)
+            if trace_callback:
+                trace_callback(event)
+
+        emit("diagnosis_started", "开始多智能体诊断", progress=5)
+        graph_payload = await self._prepare_graph_context(symptoms, sensor_data, context, emit)
+
+        async def run_expert(expert: LLMExpertAgent) -> ExpertOpinion:
+            expert_started_at = time.perf_counter()
+            emit("expert_started", f"{expert.name} 开始分析", progress=20, agent_key=expert.expert_type.value, agent_name=expert.name)
+            opinion = await expert.analyze(symptoms, sensor_data, context)
+            opinion.duration_ms = round((time.perf_counter() - expert_started_at) * 1000, 2)
+            emit(
+                "expert_completed",
+                f"{expert.name} 完成分析",
+                progress=55,
+                agent_key=expert.expert_type.value,
+                agent_name=expert.name,
+                used_fallback=opinion.used_fallback,
+                duration_ms=opinion.duration_ms,
+            )
+            return opinion
+
+        opinions = await asyncio.gather(*[run_expert(expert) for expert in self.experts.values()])
+        emit(
+            "coordinator_started",
+            "协调者开始整合意见",
+            progress=70,
+            agent_key="coordinator",
+            agent_name=self.coordinator.name if self.coordinator else "诊断协调专家",
         )
-        
-        # 3. 生成模拟推演场景
-        scenarios = await self._generate_scenarios(
-            symptoms, final_conclusion, expert_opinions
+        coordinator_started_at = time.perf_counter()
+        coordinated = await self._coordinate(opinions)
+        coordinated["coordinator_metadata"]["duration_ms"] = round((time.perf_counter() - coordinator_started_at) * 1000, 2)
+        emit(
+            "coordinator_completed",
+            "协调者完成整合",
+            progress=85,
+            agent_key="coordinator",
+            used_fallback=coordinated["coordinator_metadata"]["used_fallback"],
+            duration_ms=coordinated["coordinator_metadata"]["duration_ms"],
         )
-        
-        # 4. 构建结果
+        scenarios = self._build_scenarios()
+        emit("scenarios_generated", "完成场景推演", progress=92)
+
         result = MultiAgentDiagnosisResult(
             diagnosis_id=diagnosis_id,
             symptoms=symptoms,
-            final_conclusion=final_conclusion["conclusion"],
-            confidence=final_conclusion["confidence"],
-            consensus_level=final_conclusion["consensus_level"],
-            expert_opinions=list(expert_opinions),
-            dissenting_views=final_conclusion.get("dissenting_views", []),
-            recommended_actions=final_conclusion["actions"],
-            spare_parts=final_conclusion.get("spare_parts", []),
-            related_cases=final_conclusion.get("related_cases", []),
-            simulation_scenarios=scenarios
-        )
-        
-        # 保存历史
-        self._diagnosis_history.set(diagnosis_id, result)
-        
-        logger.info(f"多智能体诊断完成: {diagnosis_id}, 置信度: {result.confidence}")
-        
-        return result
-    
-    async def _coordinate_opinions(self, symptoms: str, 
-                                  opinions: List[ExpertOpinion]) -> Dict[str, Any]:
-        """协调专家意见"""
-        # 统计各根因的置信度加权
-        cause_confidence = {}
-        all_suggestions = []
-        all_evidence = []
-        
-        for op in opinions:
-            cause = op.root_cause
-            if cause not in cause_confidence:
-                cause_confidence[cause] = {"confidence": 0, "count": 0, "experts": []}
-            cause_confidence[cause]["confidence"] += op.confidence
-            cause_confidence[cause]["count"] += 1
-            cause_confidence[cause]["experts"].append(op.expert_name)
-            
-            all_suggestions.extend(op.suggestions)
-            all_evidence.extend(op.evidence)
-        
-        # 找出最高置信度的根因
-        best_cause = max(cause_confidence.items(), 
-                        key=lambda x: x[1]["confidence"])
-        
-        # 计算共识程度
-        total_opinions = len(opinions)
-        consensus_count = best_cause[1]["count"]
-        consensus_level = consensus_count / total_opinions
-        
-        # 收集不同意见
-        dissenting_views = [
-            op for op in opinions 
-            if op.root_cause != best_cause[0]
-        ]
-        
-        # 生成建议动作
-        actions = self._prioritize_actions(all_suggestions)
-        
-        # 生成备件清单
-        spare_parts = self._generate_spare_parts_list(best_cause[0], opinions)
-        
-        return {
-            "conclusion": best_cause[0],
-            "confidence": best_cause[1]["confidence"] / best_cause[1]["count"],
-            "consensus_level": consensus_level,
-            "supporting_experts": best_cause[1]["experts"],
-            "dissenting_views": dissenting_views[:2],  # 最多保留2个不同意见
-            "evidence": list(set(all_evidence))[:5],  # 去重，最多5条
-            "actions": actions,
-            "spare_parts": spare_parts,
-            "related_cases": ["CASE_20230815_001", "CASE_20231022_003"]
-        }
-    
-    def _prioritize_actions(self, suggestions: List[str]) -> List[Dict[str, Any]]:
-        """优先排序建议动作"""
-        # 简单的优先级判断
-        priority_keywords = {
-            "critical": ["立即", "马上", "紧急", "危险"],
-            "high": ["尽快", "检查", "确认"],
-            "medium": ["考虑", "评估", "优化"],
-            "low": ["可以", "建议", "参考"]
-        }
-        
-        prioritized = []
-        for suggestion in suggestions:
-            priority = "medium"
-            for level, keywords in priority_keywords.items():
-                if any(kw in suggestion for kw in keywords):
-                    priority = level
-                    break
-            
-            prioritized.append({
-                "action": suggestion,
-                "priority": priority,
-                "estimated_time": self._estimate_time(suggestion),
-                "requires_shutdown": "停机" in suggestion or "停电" in suggestion
-            })
-        
-        # 按优先级排序
-        priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        prioritized.sort(key=lambda x: priority_order.get(x["priority"], 2))
-        
-        return prioritized[:10]  # 最多10条
-    
-    def _estimate_time(self, action: str) -> str:
-        """估计操作时间"""
-        if any(kw in action for kw in ["校准", "检查", "确认"]):
-            return "30分钟-1小时"
-        elif any(kw in action for kw in ["更换", "清洗", "维修"]):
-            return "2-4小时"
-        elif any(kw in action for kw in ["停机", "大修", "改造"]):
-            return "1-3天"
-        return "未知"
-    
-    def _generate_spare_parts_list(self, root_cause: str, 
-                                   opinions: List[ExpertOpinion]) -> List[Dict[str, Any]]:
-        """生成备件清单"""
-        # 根据根因关键词匹配备件
-        parts_mapping = {
-            "曝气盘": [{"name": "微孔曝气盘", "spec": "Φ215mm", "quantity": 5}],
-            "风机": [{"name": "风机滤网", "spec": "适配型号", "quantity": 2}],
-            "轴承": [{"name": "深沟球轴承", "spec": "6205-2RS", "quantity": 2}],
-            "机械密封": [{"name": "机械密封件", "spec": "适用泵型号", "quantity": 1}],
-            "传感器": [{"name": "溶解氧传感器探头", "spec": "工业级", "quantity": 1}],
-            "电机": [{"name": "电机绝缘漆", "spec": "H级", "quantity": 1}]
-        }
-        
-        spare_parts = []
-        for keyword, parts in parts_mapping.items():
-            if keyword in root_cause:
-                spare_parts.extend(parts)
-        
-        # 如果没有匹配到，给出通用建议
-        if not spare_parts:
-            spare_parts = [
-                {"name": "常用紧固件包", "spec": "M6-M12", "quantity": 1},
-                {"name": "密封胶带", "spec": "PTFE", "quantity": 2}
-            ]
-        
-        return spare_parts
-    
-    async def _generate_scenarios(self, symptoms: str, conclusion: Dict[str, Any],
-                                 opinions: List[ExpertOpinion]) -> List[Dict[str, Any]]:
-        """生成模拟推演场景"""
-        scenarios = [
-            {
-                "scenario": "及时处理",
-                "description": "按照建议立即处理",
-                "timeline": [
-                    {"time": "0h", "action": "开始处理", "expected_state": "设备停机"},
-                    {"time": "2h", "action": "完成维修", "expected_state": "设备就绪"},
-                    {"time": "4h", "action": "恢复运行", "expected_state": "正常运行"}
-                ],
-                "outcome": "预计4小时内恢复正常",
-                "risk_level": "low"
+            final_conclusion=coordinated["conclusion"],
+            confidence=coordinated["confidence"],
+            consensus_level=coordinated["consensus_level"],
+            expert_opinions=opinions,
+            dissenting_views=coordinated["dissenting_views"],
+            recommended_actions=coordinated["actions"],
+            spare_parts=coordinated["spare_parts"],
+            related_cases=graph_payload["related_cases"],
+            simulation_scenarios=scenarios,
+            agent_model_map=self.get_agent_runtime_profiles(),
+            fallback_summary={
+                "experts": {
+                    item.expert_type.value: {
+                        "agent_name": item.expert_name,
+                        "used_fallback": item.used_fallback,
+                        "fallback_reason": item.fallback_reason,
+                        "llm_attempted": item.llm_attempted,
+                        "llm_used": item.llm_used,
+                        "model_name": item.model_name,
+                    }
+                    for item in opinions
+                },
+                "coordinator": coordinated["coordinator_metadata"],
             },
-            {
-                "scenario": "延迟处理",
-                "description": "延迟24小时处理",
-                "timeline": [
-                    {"time": "0h", "action": "维持现状", "expected_state": "带病运行"},
-                    {"time": "12h", "action": "故障扩大", "expected_state": "参数恶化"},
-                    {"time": "24h", "action": "被迫停机", "expected_state": "设备损坏风险"}
-                ],
-                "outcome": "可能导致二次损坏",
-                "risk_level": "high"
+            coordinator_metadata=coordinated["coordinator_metadata"],
+            debug_metadata={
+                "graph_rag": graph_payload["debug"],
+                "experts": {
+                    item.expert_type.value: {
+                        "expert_name": item.expert_name,
+                        "model_name": item.model_name,
+                        "llm_attempted": item.llm_attempted,
+                        "llm_used": item.llm_used,
+                        "used_fallback": item.used_fallback,
+                        "fallback_reason": item.fallback_reason,
+                        "response_excerpt": item.response_excerpt,
+                        "duration_ms": item.duration_ms,
+                    }
+                    for item in opinions
+                },
+                "coordinator": coordinated["coordinator_metadata"],
+                "execution_trace": execution_trace,
+            },
+        )
+        self._diagnosis_history.set(diagnosis_id, result)
+        emit(
+            "diagnosis_completed",
+            "多智能体诊断完成",
+            progress=100,
+            diagnosis_id=diagnosis_id,
+            duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
+        result.debug_metadata["execution_trace"] = execution_trace
+        return result
+
+    async def _prepare_graph_context(
+        self,
+        symptoms: str,
+        sensor_data: Dict[str, Any],
+        context: Dict[str, Any],
+        emit: Callable[[str, str], None],
+    ) -> Dict[str, Any]:
+        if not context.get("use_graph_rag", False):
+            summary = {"sources": ["CASE_20230815_001", "CASE_20231022_003"]}
+            context["graph_rag_summary"] = summary
+            return {"related_cases": summary["sources"], "debug": {"enabled": False, "query": None, "summary": summary}}
+
+        query = f"{symptoms} | sensor={json.dumps(sensor_data, ensure_ascii=False)}"
+        graph_started_at = time.perf_counter()
+        emit("graph_rag_started", "GraphRAG 开始检索", progress=10)
+        try:
+            graph_result = await graph_rag.query(query)
+            sources = graph_result.get("sources") or ["CASE_20230815_001"]
+            summary = {
+                "sources": sources[:4],
+                "answer_excerpt": str(graph_result.get("answer", ""))[:180],
             }
+            context["graph_rag_query"] = query
+            context["graph_rag_summary"] = summary
+            emit(
+                "graph_rag_completed",
+                "GraphRAG 检索完成",
+                progress=18,
+                source_count=len(summary["sources"]),
+                duration_ms=round((time.perf_counter() - graph_started_at) * 1000, 2),
+            )
+            return {"related_cases": summary["sources"], "debug": {"enabled": True, "query": query, "summary": summary}}
+        except Exception as exc:
+            logger.warning(f"graph rag failed: {exc}")
+            summary = {"sources": ["CASE_20230815_001", "CASE_20231022_003"], "error": str(exc)}
+            context["graph_rag_query"] = query
+            context["graph_rag_summary"] = summary
+            emit(
+                "graph_rag_failed",
+                "GraphRAG 检索失败，使用默认案例",
+                progress=18,
+                duration_ms=round((time.perf_counter() - graph_started_at) * 1000, 2),
+            )
+            return {"related_cases": summary["sources"], "debug": {"enabled": True, "query": query, "summary": summary}}
+
+    async def _coordinate(self, opinions: List[ExpertOpinion]) -> Dict[str, Any]:
+        if self.coordinator and self.coordinator.llm_client:
+            llm_result = await self._coordinate_with_llm(opinions)
+            if llm_result is not None:
+                return llm_result
+        return self._coordinate_with_rules(opinions, used_fallback=False, fallback_reason=None)
+
+    async def _coordinate_with_llm(self, opinions: List[ExpertOpinion]) -> Optional[Dict[str, Any]]:
+        opinion_payload = [
+            {
+                "expert_type": item.expert_type.value,
+                "expert_name": item.expert_name,
+                "confidence": item.confidence,
+                "root_cause": item.root_cause,
+                "evidence": item.evidence,
+                "suggestions": item.suggestions,
+            }
+            for item in opinions
         ]
-        return scenarios
-    
+        prompt = "\n".join(
+            [
+                self.coordinator.system_prompt,
+                "请整合以下专家意见，只输出一个 JSON 对象，不要 markdown，不要解释。",
+                json.dumps(opinion_payload, ensure_ascii=False),
+                "JSON fields: conclusion, confidence, consensus_level, actions, spare_parts",
+            ]
+        )
+        try:
+            response = await self.coordinator._call_llm(prompt)
+            payload = self.coordinator._extract_json(response)
+            grouped = self._group_opinions(opinions)
+            best_group = max(grouped.values(), key=lambda items: (len(items), sum(op.confidence for op in items)))
+            return {
+                "conclusion": str(payload.get("conclusion") or payload.get("root_cause") or best_group[0].root_cause),
+                "confidence": float(payload.get("confidence", round(sum(item.confidence for item in best_group) / len(best_group), 2))),
+                "consensus_level": float(payload.get("consensus_level", round(len(best_group) / max(len(opinions), 1), 2))),
+                "dissenting_views": [item for item in opinions if item not in best_group][:2],
+                "actions": self._normalize_actions(payload.get("actions")) or self._prioritize_actions(
+                    [suggestion for item in opinions for suggestion in item.suggestions]
+                ),
+                "spare_parts": self._normalize_parts(payload.get("spare_parts")) or self._build_spare_parts(best_group[0].root_cause),
+                "coordinator_metadata": {
+                    "model_name": self.coordinator.model_name if self.coordinator else None,
+                    "llm_attempted": True,
+                    "llm_used": True,
+                    "used_fallback": False,
+                    "fallback_reason": None,
+                    "response_excerpt": str(response).strip()[:240],
+                },
+            }
+        except Exception as exc:
+            return self._coordinate_with_rules(opinions, used_fallback=True, fallback_reason=str(exc))
+
+    def _coordinate_with_rules(
+        self,
+        opinions: List[ExpertOpinion],
+        used_fallback: bool,
+        fallback_reason: Optional[str],
+    ) -> Dict[str, Any]:
+        grouped = self._group_opinions(opinions)
+        best_group = max(grouped.values(), key=lambda items: (len(items), sum(op.confidence for op in items)))
+        best_root_cause = best_group[0].root_cause
+        suggestions = [suggestion for item in opinions for suggestion in item.suggestions]
+        return {
+            "conclusion": best_root_cause,
+            "confidence": round(sum(item.confidence for item in best_group) / len(best_group), 2),
+            "consensus_level": round(len(best_group) / max(len(opinions), 1), 2),
+            "dissenting_views": [item for item in opinions if item not in best_group][:2],
+            "actions": self._prioritize_actions(suggestions),
+            "spare_parts": self._build_spare_parts(best_root_cause),
+            "coordinator_metadata": {
+                "model_name": self.coordinator.model_name if self.coordinator else None,
+                "llm_attempted": bool(self.coordinator and self.coordinator.llm_client),
+                "llm_used": False,
+                "used_fallback": used_fallback,
+                "fallback_reason": fallback_reason,
+                "response_excerpt": f"协调者整合了 {len(opinions)} 位专家意见，主结论为 {best_root_cause}"[:240],
+            },
+        }
+
+    def _group_opinions(self, opinions: List[ExpertOpinion]) -> Dict[str, List[ExpertOpinion]]:
+        grouped: Dict[str, List[ExpertOpinion]] = {}
+        for item in opinions:
+            grouped.setdefault(self._normalize_cause(item.root_cause), []).append(item)
+        return grouped
+
+    def _normalize_cause(self, text: str) -> str:
+        normalized = re.sub(r"[，。,. ]+", "", text.lower())
+        if any(word in normalized for word in ["曝气", "供氧", "风机"]):
+            return "aeration"
+        if any(word in normalized for word in ["传感器", "校准", "do"]):
+            return "sensor"
+        if any(word in normalized for word in ["电机", "供电", "电流"]):
+            return "electrical"
+        return normalized[:24]
+
+    def _normalize_actions(self, actions: Any) -> List[Dict[str, Any]]:
+        if not isinstance(actions, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for item in actions:
+            if isinstance(item, str):
+                normalized.append(
+                    {
+                        "action": item,
+                        "priority": "high" if any(keyword in item for keyword in ["检查", "清洗", "校准"]) else "medium",
+                        "estimated_time": "30分钟",
+                        "requires_shutdown": False,
+                    }
+                )
+            elif isinstance(item, dict) and item.get("action"):
+                normalized.append(
+                    {
+                        "action": str(item.get("action")),
+                        "priority": str(item.get("priority", "medium")),
+                        "estimated_time": str(item.get("estimated_time", "30分钟")),
+                        "requires_shutdown": bool(item.get("requires_shutdown", False)),
+                    }
+                )
+        return normalized[:5]
+
+    def _normalize_parts(self, parts: Any) -> List[Dict[str, Any]]:
+        if not isinstance(parts, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for item in parts:
+            if isinstance(item, dict) and item.get("name"):
+                normalized.append(
+                    {
+                        "name": str(item.get("name")),
+                        "quantity": int(item.get("quantity", 1)),
+                        "spec": str(item.get("spec", "待确认")),
+                    }
+                )
+        return normalized[:4]
+
+    def _prioritize_actions(self, suggestions: List[str]) -> List[Dict[str, Any]]:
+        seen = set()
+        actions: List[Dict[str, Any]] = []
+        for suggestion in suggestions:
+            suggestion = str(suggestion).strip()
+            if not suggestion or suggestion in seen:
+                continue
+            seen.add(suggestion)
+            actions.append(
+                {
+                    "action": suggestion,
+                    "priority": "high" if any(keyword in suggestion for keyword in ["检查", "清洗", "校准"]) else "medium",
+                    "estimated_time": "30分钟",
+                    "requires_shutdown": False,
+                }
+            )
+        return actions[:6]
+
+    def _build_spare_parts(self, root_cause: str) -> List[Dict[str, Any]]:
+        if "传感器" in root_cause or "sensor" in self._normalize_cause(root_cause):
+            return [{"name": "DO 传感器探头", "quantity": 1, "spec": "与现场仪表型号匹配"}]
+        return [
+            {"name": "风机轴承组件", "quantity": 1, "spec": "按现场风机型号选配"},
+            {"name": "曝气盘膜片", "quantity": 2, "spec": "耐腐蚀型"},
+        ]
+
+    def _build_scenarios(self) -> List[Dict[str, Any]]:
+        return [
+            {"scenario": "及时处理", "impact": "2小时内恢复供氧能力，工艺风险可控", "probability": 0.72},
+            {"scenario": "延迟处理", "impact": "溶解氧持续偏低，出水稳定性下降并放大设备损耗", "probability": 0.28},
+        ]
+
+    def get_agent_runtime_profiles(self) -> Dict[str, Dict[str, Any]]:
+        profiles = {expert_type.value: expert.to_runtime_dict() for expert_type, expert in self.experts.items()}
+        if self.coordinator:
+            profiles["coordinator"] = self.coordinator.to_runtime_dict()
+        return profiles
+
+    def get_agent_catalog(self) -> Dict[str, Any]:
+        experts = [expert.to_runtime_dict() for expert in self.experts.values()]
+        return {
+            "experts": experts,
+            "coordinator": self.coordinator.to_runtime_dict() if self.coordinator else None,
+            "total_agents": len(experts) + (1 if self.coordinator else 0),
+        }
+
     def get_diagnosis_history(self, limit: int = 10) -> List[MultiAgentDiagnosisResult]:
-        """获取诊断历史"""
-        history = []
-        for key in list(self._diagnosis_history.keys())[-limit:]:
-            result = self._diagnosis_history.get(key)
-            if result:
-                history.append(result)
-        return history
+        items = list(self._diagnosis_history.values())
+        items.sort(key=lambda item: item.generated_at, reverse=True)
+        return items[:limit]

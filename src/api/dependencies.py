@@ -15,7 +15,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.utils.config import load_config
-from src.utils.connection_pool import PoolConfig, get_pool
+from src.utils.database_runtime import build_runtime_database_adapter
 from src.utils.thread_safe import ThreadSafeDict
 
 try:
@@ -24,16 +24,7 @@ except ImportError:
     jwt = None
 
 _config = load_config()
-_database_config = _config.get("database", {}).get("sqlite", {})
-_db_path = _database_config.get("path", "data/metadata.db")
-_db_pool = get_pool(
-    _db_path,
-    PoolConfig(
-        max_connections=5,
-        min_connections=1,
-        max_idle_time=300,
-    ),
-)
+_database_adapter = build_runtime_database_adapter(_config.get("database", {}))
 
 SECRET_KEY = _config.get("security", {}).get("jwt_secret", "your-secret-key")
 ALGORITHM = "HS256"
@@ -73,20 +64,24 @@ _users: ThreadSafeDict[Dict[str, Any]] = ThreadSafeDict()
 _tokens: ThreadSafeDict[Dict[str, Any]] = ThreadSafeDict()
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def create_access_token(
     user_id: str,
     username: str,
     roles: List[str],
     tenant_id: Optional[str] = None,
 ) -> str:
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = utc_now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": user_id,
         "username": username,
         "roles": roles,
         "tenant_id": tenant_id,
-        "exp": int(expire.replace(tzinfo=timezone.utc).timestamp()),
-        "iat": int(datetime.utcnow().replace(tzinfo=timezone.utc).timestamp()),
+        "exp": int(expire.timestamp()),
+        "iat": int(utc_now().timestamp()),
     }
     token = _encode_token(payload)
     _tokens.set(
@@ -159,7 +154,7 @@ def _decode_token(token: str) -> Dict[str, Any]:
 
     payload = json.loads(_urlsafe_b64decode(payload_segment).decode("utf-8"))
     exp = payload.get("exp")
-    if exp is not None and int(exp) < int(datetime.utcnow().replace(tzinfo=timezone.utc).timestamp()):
+    if exp is not None and int(exp) < int(utc_now().timestamp()):
         raise ValueError("Token expired")
     return payload
 
@@ -283,7 +278,7 @@ def require_roles(*roles: str):
 
 
 async def get_db_connection():
-    with _db_pool.get_connection() as connection:
+    with _database_adapter.connect() as connection:
         yield connection
 
 

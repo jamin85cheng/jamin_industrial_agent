@@ -1,21 +1,23 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { Layout, theme } from 'antd'
-import MainLayout from './components/Layout/MainLayout'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Alerts from './pages/Alerts'
-import Diagnosis from './pages/Diagnosis'
-import Rules from './pages/Rules'
-import Config from './pages/Config'
+import { Suspense, lazy } from 'react'
 import { useAuthStore } from './stores/auth'
 
-const { Content } = Layout
+const MainLayout = lazy(() => import('./components/Layout/MainLayout'))
+const Login = lazy(() => import('./pages/Login'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Alerts = lazy(() => import('./pages/Alerts'))
+const Diagnosis = lazy(() => import('./pages/Diagnosis'))
+const Rules = lazy(() => import('./pages/Rules'))
+const Config = lazy(() => import('./pages/Config'))
+
+const PageFallback = () => (
+  <div style={{ minHeight: '40vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280' }}>
+    页面加载中...
+  </div>
+)
 
 function ProtectedApp() {
   const { isAuthenticated } = useAuthStore()
-  const {
-    token: { colorBgContainer, borderRadiusLG },
-  } = theme.useToken()
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -23,24 +25,26 @@ function ProtectedApp() {
 
   return (
     <MainLayout>
-      <Content
+      <div
         style={{
           margin: '24px 16px',
           padding: 24,
           minHeight: 'calc(100vh - 112px)',
-          background: colorBgContainer,
-          borderRadius: borderRadiusLG,
+          background: '#ffffff',
+          borderRadius: 16,
         }}
       >
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/alerts" element={<Alerts />} />
-          <Route path="/diagnosis" element={<Diagnosis />} />
-          <Route path="/rules" element={<Rules />} />
-          <Route path="/config" element={<Config />} />
-        </Routes>
-      </Content>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/diagnosis" element={<Diagnosis />} />
+            <Route path="/rules" element={<Rules />} />
+            <Route path="/config" element={<Config />} />
+          </Routes>
+        </Suspense>
+      </div>
     </MainLayout>
   )
 }
@@ -50,13 +54,15 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route
-          path="/login"
-          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
-        />
-        <Route path="/*" element={<ProtectedApp />} />
-      </Routes>
+      <Suspense fallback={<PageFallback />}>
+        <Routes>
+          <Route
+            path="/login"
+            element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
+          />
+          <Route path="/*" element={<ProtectedApp />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

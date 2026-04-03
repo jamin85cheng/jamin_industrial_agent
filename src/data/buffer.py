@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import asyncio
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from loguru import logger
@@ -18,6 +18,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.utils.connection_pool import get_pool, PoolConfig
 from security.input_validator import InputValidator, ValidationError
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -187,7 +191,7 @@ class DataBuffer:
                                 point['fields']
                             )
                             ts = InputValidator.validate_timestamp(
-                                point.get('timestamp', datetime.utcnow())
+                                point.get('timestamp', utc_now())
                             )
                             
                             cursor.execute(

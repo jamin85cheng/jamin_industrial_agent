@@ -9,9 +9,13 @@ import asyncio
 import threading
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from loguru import logger
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class HealthStatus(Enum):
@@ -30,7 +34,7 @@ class HealthCheckResult:
     response_time_ms: float
     message: str
     details: Dict[str, Any] = field(default_factory=dict)
-    checked_at: datetime = field(default_factory=datetime.utcnow)
+    checked_at: datetime = field(default_factory=utc_now)
 
     @property
     def response_time(self) -> float:
@@ -174,7 +178,7 @@ class HealthChecker:
         
         return {
             "status": overall.value,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "checks": checks
         }
     

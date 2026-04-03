@@ -1,18 +1,31 @@
-import React from 'react'
-import { Row, Col, Card, Statistic, Table, Tag, Progress, Typography, Empty, Alert } from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Alert, Button, Card, Col, Empty, List, Progress, Row, Space, Statistic, Table, Tag, Typography, message } from 'antd'
 import {
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
-  CloseCircleOutlined,
-  DashboardOutlined,
+  ApiOutlined,
   BellOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  DashboardOutlined,
   DatabaseOutlined,
+  RobotOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import type { TableProps } from 'antd'
-import ReactECharts from 'echarts-for-react'
-import { alertsApi, devicesApi, type AlertRecord, type DeviceRecord } from '../../lib/api'
+import {
+  alertsApi,
+  devicesApi,
+  diagnosisV2Api,
+  extractApiError,
+  type AlertRecord,
+  type DeviceRecord,
+  type DiagnosisResultV2,
+  type DiagnosisTaskResponseV2,
+} from '../../lib/api'
 import './style.css'
+
+const { Paragraph, Text, Title } = Typography
 
 type DeviceStatus = 'online' | 'warning' | 'offline'
 
@@ -36,247 +49,406 @@ const statusMeta: Record<DeviceStatus, { color: string; label: string }> = {
   offline: { color: 'error', label: '离线' },
 }
 
-const normalizeDeviceStatus = (status: DeviceRecord['status']): DeviceStatus => {
-  if (status === 'error') {
-    return 'warning'
+const workflowColor = (status?: string) => {
+  if (status === 'completed') return 'success'
+  if (status === 'failed' || status === 'timeout' || status === 'interrupted') return 'error'
+  if (status === 'recovered') return 'gold'
+  return 'processing'
+}
+
+const workflowLabel = (status?: string) => {
+  const labels: Record<string, string> = {
+    pending: '排队中',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+    timeout: '超时',
+    interrupted: '中断',
+    recovered: '已恢复',
   }
+  return labels[status || ''] || status || '未知'
+}
+
+const stageLabel = (value?: string) => {
+  const labels: Record<string, string> = {
+    queued: '排队中',
+    diagnosis_started: '诊断启动',
+    graph_rag_started: 'GraphRAG 检索开始',
+    graph_rag_completed: 'GraphRAG 检索完成',
+    graph_rag_failed: 'GraphRAG 检索失败',
+    expert_started: '专家分析开始',
+    expert_completed: '专家分析完成',
+    coordinator_started: '协调者整合开始',
+    coordinator_completed: '协调者整合完成',
+    debate_started: 'CAMEL 协作开始',
+    debate_round_started: '协作轮次开始',
+    debate_round_completed: '协作轮次完成',
+    debate_completed: 'CAMEL 协作完成',
+    diagnosis_completed: '诊断完成',
+  }
+  return labels[value || ''] || value || '排队中'
+}
+
+const normalizeDeviceStatus = (status: DeviceRecord['status']): DeviceStatus => {
+  if (status === 'error') return 'warning'
   return status
 }
 
 const buildUptime = (status: DeviceStatus) => {
-  switch (status) {
-    case 'online':
-      return 98
-    case 'warning':
-      return 84
-    case 'offline':
-      return 61
-  }
+  if (status === 'online') return 98
+  if (status === 'warning') return 86
+  return 63
 }
 
-const DeviceCard: React.FC<{ device: DashboardDevice }> = ({ device }) => {
-  const getStatusIcon = (status: DeviceStatus) => {
-    switch (status) {
-      case 'online':
-        return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 24 }} />
-      case 'warning':
-        return <ExclamationCircleOutlined style={{ color: '#faad14', fontSize: 24 }} />
-      case 'offline':
-        return <CloseCircleOutlined style={{ color: '#f5222d', fontSize: 24 }} />
-    }
-  }
+const isTaskActive = (task: DiagnosisTaskResponseV2) => {
+  const workflowStatus = task.workflow?.status || task.status
+  return ['pending', 'running', 'recovered'].includes(workflowStatus)
+}
 
-  return (
-    <Card className="device-card" size="small">
-      <div className="device-card-content">
-        {getStatusIcon(device.status)}
-        <div className="device-info">
-          <div className="device-name">{device.name}</div>
-          <div className="device-tags">
-            {device.tagCount} 个测点 · <Tag color={statusMeta[device.status].color}>{statusMeta[device.status].label}</Tag>
-          </div>
+const mergeTaskSnapshot = (tasks: DiagnosisTaskResponseV2[], nextTask: DiagnosisTaskResponseV2) => {
+  const next = [...tasks]
+  const index = next.findIndex((task) => task.task_id === nextTask.task_id)
+  if (index >= 0) {
+    next[index] = nextTask
+  } else {
+    next.unshift(nextTask)
+  }
+  return next.slice(0, 12)
+}
+
+const DeviceCard: React.FC<{ device: DashboardDevice }> = ({ device }) => (
+  <Card className="device-card" size="small">
+    <div className="device-card-content">
+      <CheckCircleOutlined
+        style={{
+          color: device.status === 'online' ? '#44b546' : device.status === 'warning' ? '#db8b2e' : '#c33b2d',
+          fontSize: 22,
+        }}
+      />
+      <div className="device-info">
+        <div className="device-name">{device.name}</div>
+        <div className="device-tags">
+          {device.tagCount} 个测点
+          <span className="device-dot" />
+          <Tag color={statusMeta[device.status].color}>{statusMeta[device.status].label}</Tag>
         </div>
       </div>
-      <Progress
-        percent={device.uptime}
-        size="small"
-        strokeColor={device.status === 'offline' ? '#f5222d' : '#1890ff'}
-        style={{ marginTop: 12 }}
-      />
-    </Card>
-  )
-}
+    </div>
+    <Progress percent={device.uptime} size="small" strokeColor={device.status === 'offline' ? '#c33b2d' : '#246bce'} style={{ marginTop: 12 }} />
+  </Card>
+)
 
-const TrendChart: React.FC = () => {
-  const option = {
-    title: { text: '24 小时关键指标趋势', textStyle: { fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'],
-    },
-    yAxis: { type: 'value' },
-    series: [
-      {
-        name: '溶解氧',
-        type: 'line',
-        smooth: true,
-        data: [3.2, 3.8, 4.1, 3.9, 4.2, 3.7, 3.5],
-        itemStyle: { color: '#1890ff' },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(24,144,255,0.3)' },
-              { offset: 1, color: 'rgba(24,144,255,0.05)' },
-            ],
-          },
-        },
-      },
-      {
-        name: 'pH',
-        type: 'line',
-        smooth: true,
-        data: [7.2, 7.1, 7.3, 7.2, 7.4, 7.1, 7.2],
-        itemStyle: { color: '#52c41a' },
-      },
-    ],
-  }
-
-  return <ReactECharts option={option} style={{ height: 300 }} />
-}
-
-const AlertTable: React.FC<{ alerts: AlertRecord[]; loading: boolean }> = ({ alerts, loading }) => {
+const AlertTable: React.FC<{
+  alerts: AlertRecord[]
+  loading: boolean
+  diagnosing?: boolean
+  onDiagnose?: (alertId: string) => void
+}> = ({ alerts, loading, diagnosing = false, onDiagnose }) => {
   const columns: TableProps<AlertRecord>['columns'] = [
     {
       title: '级别',
       dataIndex: 'severity',
       key: 'severity',
-      width: 90,
-      render: (severity: AlertRecord['severity']) => {
-        const meta = severityMeta[severity]
-        return <Tag color={meta.color}>{meta.label}</Tag>
-      },
+      width: 110,
+      render: (severity: AlertRecord['severity']) => <Tag color={severityMeta[severity].color}>{severityMeta[severity].label}</Tag>,
     },
+    { title: '规则', dataIndex: 'rule_name', key: 'rule_name', render: (value: string | null | undefined) => value || '-' },
+    { title: '描述', dataIndex: 'message', key: 'message', ellipsis: true },
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (value: string) => new Date(value).toLocaleString() },
     {
-      title: '规则名称',
-      dataIndex: 'rule_name',
-      key: 'rule_name',
-      render: (value: string | null | undefined) => value || '-',
-    },
-    {
-      title: '描述',
-      dataIndex: 'message',
-      key: 'message',
-      ellipsis: true,
-    },
-    {
-      title: '时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 180,
-      render: (value: string) => new Date(value).toLocaleString(),
+      title: '操作',
+      key: 'action',
+      width: 120,
+      render: (_, record) =>
+        onDiagnose ? (
+          <Button size="small" loading={diagnosing} onClick={() => onDiagnose(record.id)}>
+            发起诊断
+          </Button>
+        ) : null,
     },
   ]
 
-  return (
-    <Table
-      columns={columns}
-      dataSource={alerts}
-      rowKey="id"
-      loading={loading}
-      locale={{ emptyText: <Empty description="暂无告警数据" /> }}
-      size="small"
-      pagination={false}
-      scroll={{ y: 200 }}
-    />
-  )
+  return <Table columns={columns} dataSource={alerts} rowKey="id" loading={loading} locale={{ emptyText: <Empty description="暂无告警" /> }} size="small" pagination={false} scroll={{ y: 220 }} />
 }
 
 const Dashboard: React.FC = () => {
-  const devicesQuery = useQuery({
-    queryKey: ['devices'],
-    queryFn: devicesApi.list,
+  const navigate = useNavigate()
+  const [liveTasks, setLiveTasks] = useState<DiagnosisTaskResponseV2[]>([])
+
+  const devicesQuery = useQuery({ queryKey: ['devices'], queryFn: devicesApi.list })
+  const alertsQuery = useQuery({ queryKey: ['alerts', 'recent'], queryFn: alertsApi.list })
+  const alertStatsQuery = useQuery({ queryKey: ['alerts', 'stats'], queryFn: alertsApi.stats })
+  const expertsQuery = useQuery({ queryKey: ['diagnosis-v2', 'experts', 'dashboard'], queryFn: diagnosisV2Api.getExperts })
+  const historyQuery = useQuery({ queryKey: ['diagnosis-v2', 'history', 'dashboard'], queryFn: () => diagnosisV2Api.getHistory(5) })
+  const tasksQuery = useQuery({
+    queryKey: ['diagnosis-v2', 'tasks', 'dashboard'],
+    queryFn: () => diagnosisV2Api.listTasks(12),
+    refetchInterval: 15000,
+  })
+  const runtimeDebugQuery = useQuery({
+    queryKey: ['diagnosis-v2', 'runtime-debug', 'dashboard'],
+    queryFn: diagnosisV2Api.getRuntimeDebug,
+    refetchInterval: 30000,
+  })
+  const diagnoseAlertMutation = useMutation({
+    mutationFn: (alertId: string) =>
+      diagnosisV2Api.analyzeAlert(alertId, {
+        use_graph_rag: true,
+        use_camel: false,
+        debug: true,
+        priority: 'high',
+      }),
+    onSuccess: (response, alertId) => {
+      if (!response.task_id) {
+        message.warning(`告警 ${alertId} 已触发诊断，但未返回任务编号`)
+        return
+      }
+      message.success(`已从告警 ${alertId} 发起诊断`)
+      navigate(`/diagnosis?taskId=${encodeURIComponent(response.task_id)}`)
+    },
+    onError: (error) => {
+      message.error(extractApiError(error, '从告警发起诊断失败'))
+    },
   })
 
-  const alertsQuery = useQuery({
-    queryKey: ['alerts', 'recent'],
-    queryFn: alertsApi.list,
-  })
+  useEffect(() => {
+    setLiveTasks(tasksQuery.data?.tasks ?? [])
+  }, [tasksQuery.data])
 
-  const alertStatsQuery = useQuery({
-    queryKey: ['alerts', 'stats'],
-    queryFn: alertsApi.stats,
-  })
+  const activeTaskIds = useMemo(
+    () =>
+      liveTasks
+        .filter(isTaskActive)
+        .slice(0, 4)
+        .map((task) => task.task_id),
+    [liveTasks],
+  )
+
+  useEffect(() => {
+    if (!activeTaskIds.length) return
+
+    const streams = activeTaskIds.map((taskId) =>
+      diagnosisV2Api.streamTask(taskId, {
+        onSnapshot: (task) => {
+          setLiveTasks((prev) => mergeTaskSnapshot(prev, task))
+        },
+        onComplete: () => {
+          void tasksQuery.refetch()
+          void runtimeDebugQuery.refetch()
+        },
+        onError: () => {
+          void tasksQuery.refetch()
+        },
+      }),
+    )
+
+    return () => {
+      streams.forEach((stream) => stream.close())
+    }
+  }, [activeTaskIds, tasksQuery, runtimeDebugQuery])
 
   const deviceItems: DashboardDevice[] = (devicesQuery.data?.devices ?? []).map((device) => {
     const status = normalizeDeviceStatus(device.status)
-    return {
-      id: device.id,
-      name: device.name,
-      status,
-      tagCount: device.tag_count,
-      uptime: buildUptime(status),
-    }
+    return { id: device.id, name: device.name, status, tagCount: device.tag_count, uptime: buildUptime(status) }
   })
 
-  const onlineCount = deviceItems.filter((device) => device.status === 'online').length
-  const warningCount = deviceItems.filter((device) => device.status === 'warning').length
-  const offlineCount = deviceItems.filter((device) => device.status === 'offline').length
-  const totalTags = deviceItems.reduce((sum, device) => sum + device.tagCount, 0)
   const recentAlerts = (alertsQuery.data?.alerts ?? []).slice(0, 5)
+  const recentDiagnosis = historyQuery.data?.history?.[0] as DiagnosisResultV2 | undefined
+  const runtimeCards = [...(expertsQuery.data?.experts ?? []), ...(expertsQuery.data?.coordinator ? [expertsQuery.data.coordinator] : [])]
+  const llmEnabledCount = runtimeCards.filter((item) => Boolean(item.runtime?.llm_enabled)).length
+  const runtimeInactive = runtimeCards.length > 0 && llmEnabledCount === 0
+  const coordinatorModel = String(expertsQuery.data?.coordinator?.runtime?.model_name || '未绑定')
+  const taskFeed = liveTasks.length ? liveTasks : tasksQuery.data?.tasks ?? []
+  const taskStorage = runtimeDebugQuery.data?.runtime.task_tracker?.storage || taskFeed[0]?.runtime?.storage || 'unknown'
+  const taskStorageTarget = runtimeDebugQuery.data?.runtime.task_tracker?.persistence_path || taskFeed[0]?.runtime?.target || '-'
+  const metadataStorage = runtimeDebugQuery.data?.runtime.metadata_database?.backend || 'unknown'
+  const metadataStorageTarget = runtimeDebugQuery.data?.runtime.metadata_database?.target || '-'
+
+  const taskSummary = useMemo(() => {
+    return {
+      running: taskFeed.filter((task) => ['pending', 'running'].includes(task.workflow?.status || task.status)).length,
+      recovered: taskFeed.filter((task) => task.workflow?.status === 'recovered').length,
+      interrupted: taskFeed.filter((task) => task.workflow?.status === 'interrupted').length,
+      completed: taskFeed.filter((task) => (task.workflow?.status || task.status) === 'completed').length,
+      failed: taskFeed.filter((task) => ['failed', 'timeout'].includes(task.workflow?.status || task.status)).length,
+    }
+  }, [taskFeed])
 
   return (
     <div className="dashboard-page">
-      {devicesQuery.isError || alertsQuery.isError || alertStatsQuery.isError ? (
+      {(devicesQuery.isError || alertsQuery.isError || alertStatsQuery.isError || expertsQuery.isError || historyQuery.isError || tasksQuery.isError || runtimeDebugQuery.isError) ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="部分运营数据加载失败" description="首页会优先展示当前已经成功获取的数据。" />
+      ) : null}
+
+      <section className="dashboard-hero">
+        <div className="dashboard-hero-copy">
+          <Tag color="cyan">商用诊断驾驶舱</Tag>
+          <Title level={2}>工业诊断运营总览</Title>
+          <Paragraph>
+            首页会直接展示长任务多智能体诊断的实时运行状态，同时把任务存储和元数据数据库的真实后端一起展示出来，方便运维确认系统是否已经切到 Postgres。
+          </Paragraph>
+          <Space wrap>
+            <Button type="primary" icon={<ThunderboltOutlined />}>
+              <Link to="/diagnosis">进入诊断控制台</Link>
+            </Button>
+            <Button icon={<RobotOutlined />}>
+              <Link to="/diagnosis">运行真实模型探测</Link>
+            </Button>
+          </Space>
+        </div>
+        <div className="dashboard-signal-board">
+          <div className="signal-pill"><span>智能体在线</span><strong>{runtimeCards.length}</strong></div>
+          <div className="signal-pill"><span>LLM 路由</span><strong>{llmEnabledCount}</strong></div>
+          <div className="signal-pill"><span>协调者模型</span><strong>{coordinatorModel}</strong></div>
+          <div className="signal-pill"><span>运行中任务</span><strong>{taskSummary.running}</strong></div>
+          <div className="signal-pill"><span>任务存储</span><strong>{String(taskStorage)}</strong></div>
+          <div className="signal-pill"><span>元数据存储</span><strong>{String(metadataStorage)}</strong></div>
+        </div>
+      </section>
+
+      {runtimeInactive ? (
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="部分实时数据加载失败"
-          description="后端接口已接通，但仍有部分资源返回异常。页面会优先展示当前拿到的数据。"
+          message="当前后端进程尚未激活多模型路由"
+          description="首页展示的是 /v2/diagnosis/experts 返回的真实运行态。如果你预期这里已经绑定模型，请检查页面当前连接的是哪一个后端实例。"
         />
       ) : null}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card loading={devicesQuery.isLoading}>
-            <Statistic
-              title="设备总数"
-              value={deviceItems.length}
-              prefix={<DashboardOutlined />}
-              suffix={<span style={{ fontSize: 14, color: '#52c41a' }}>({onlineCount} 在线)</span>}
-            />
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="设备总数" value={deviceItems.length} prefix={<DashboardOutlined />} /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="测点总数" value={deviceItems.reduce((sum, item) => sum + item.tagCount, 0)} prefix={<DatabaseOutlined />} /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="活动告警" value={alertStatsQuery.data?.active_alerts ?? 0} prefix={<BellOutlined />} valueStyle={{ color: '#c33b2d' }} /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="AI 智能体" value={runtimeCards.length} prefix={<ApiOutlined />} /></Card></Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} xl={10}>
+          <Card title="诊断指挥中心" className="dashboard-card command-card" loading={expertsQuery.isLoading || historyQuery.isLoading}>
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <div className="command-grid">
+                {runtimeCards.map((item) => (
+                  <div className="runtime-chip" key={item.id}>
+                    <div>
+                      <Text strong>{item.name}</Text>
+                      <div><Text type="secondary">{item.type}</Text></div>
+                    </div>
+                    <Space size={[6, 6]} wrap>
+                      <Tag color="blue">{String(item.runtime?.model_name || '未绑定')}</Tag>
+                      <Tag color={item.runtime?.llm_enabled ? 'success' : 'default'}>{item.runtime?.llm_enabled ? '模型已启用' : '模型未启用'}</Tag>
+                    </Space>
+                  </div>
+                ))}
+              </div>
+
+              {recentDiagnosis ? (
+                <div className="briefing-panel">
+                  <div className="briefing-header">
+                    <Text strong>最近一次诊断结论</Text>
+                    <Tag color="geekblue">{new Date(recentDiagnosis.generated_at).toLocaleString()}</Tag>
+                  </div>
+                  <Paragraph className="briefing-text">{recentDiagnosis.final_conclusion}</Paragraph>
+                  <Space wrap>
+                    <Tag color="purple">置信度 {Math.round(recentDiagnosis.confidence * 100)}%</Tag>
+                    <Tag color="gold">共识度 {Math.round(recentDiagnosis.consensus_level * 100)}%</Tag>
+                    {recentDiagnosis.related_cases.slice(0, 2).map((item) => <Tag key={item}>{item}</Tag>)}
+                  </Space>
+                </div>
+              ) : (
+                <Empty description="暂无诊断历史" />
+              )}
+            </Space>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card loading={devicesQuery.isLoading}>
-            <Statistic title="监控点位" value={totalTags} prefix={<DatabaseOutlined />} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card loading={alertStatsQuery.isLoading}>
-            <Statistic
-              title="活动告警"
-              value={alertStatsQuery.data?.active_alerts ?? 0}
-              prefix={<BellOutlined />}
-              valueStyle={{ color: '#f5222d' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card loading={alertsQuery.isLoading}>
-            <Statistic title="24小时数据量" value={1105920} suffix="条" />
+
+        <Col xs={24} xl={14}>
+          <Card title="数据库运行态" className="dashboard-card" loading={runtimeDebugQuery.isLoading}>
+            <div className="task-panel-header">
+              <div className="task-summary-grid">
+                <div className="task-summary-card"><span>任务存储</span><strong>{String(taskStorage)}</strong></div>
+                <div className="task-summary-card"><span>元数据存储</span><strong>{String(metadataStorage)}</strong></div>
+                <div className="task-summary-card"><span>任务活跃数</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.active_tasks ?? taskSummary.running}</strong></div>
+                <div className="task-summary-card"><span>任务运行数</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.running_tasks ?? 0}</strong></div>
+                <div className="task-summary-card"><span>路由状态</span><strong>{runtimeDebugQuery.data?.runtime.router_enabled ? '已启用' : '未启用'}</strong></div>
+              </div>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Text type="secondary">任务存储目标：{taskStorageTarget}</Text>
+                <Text type="secondary">元数据目标：{metadataStorageTarget}</Text>
+              </Space>
+            </div>
           </Card>
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} lg={8}>
-          <Card title="设备状态" className="dashboard-card" loading={devicesQuery.isLoading}>
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              当前共有 {onlineCount} 台在线，{warningCount} 台待关注，{offlineCount} 台离线。
-            </Typography.Paragraph>
-            {deviceItems.length > 0 ? (
-              <div className="device-grid">
-                {deviceItems.map((device) => (
-                  <DeviceCard key={device.id} device={device} />
-                ))}
+        <Col xs={24} xl={14}>
+          <Card title="持久化诊断任务概览" className="dashboard-card" loading={tasksQuery.isLoading}>
+            <div className="task-panel-header">
+              <div className="task-summary-grid">
+                <div className="task-summary-card"><span>运行中</span><strong>{taskSummary.running}</strong></div>
+                <div className="task-summary-card"><span>已恢复</span><strong>{taskSummary.recovered}</strong></div>
+                <div className="task-summary-card"><span>中断</span><strong>{taskSummary.interrupted}</strong></div>
+                <div className="task-summary-card"><span>已完成</span><strong>{taskSummary.completed}</strong></div>
+                <div className="task-summary-card"><span>失败</span><strong>{taskSummary.failed}</strong></div>
               </div>
+              <Space size={8} wrap>
+                <Tag color={activeTaskIds.length ? 'processing' : 'default'}>
+                  {activeTaskIds.length ? `已连接 ${activeTaskIds.length} 条实时任务流` : '当前无实时任务流'}
+                </Tag>
+              </Space>
+            </div>
+
+            {taskFeed.length > 0 ? (
+              <List
+                className="task-list"
+                dataSource={taskFeed}
+                renderItem={(task: DiagnosisTaskResponseV2) => {
+                  const percentage = Math.round(Number((task.progress as { percentage?: number })?.percentage || 0))
+                  const currentStage = stageLabel(task.workflow?.current_stage || String((task.progress as { current_action?: string })?.current_action || 'queued'))
+                  return (
+                    <List.Item
+                      actions={[
+                        <Button key={task.task_id} type="link" size="small">
+                          <Link to={`/diagnosis?taskId=${encodeURIComponent(task.task_id)}`}>接管任务</Link>
+                        </Button>,
+                      ]}
+                    >
+                      <div className="task-row">
+                        <div className="task-row-main">
+                          <Space wrap>
+                            <Tag color={workflowColor(task.workflow?.status || task.status)}>{workflowLabel(task.workflow?.status || task.status)}</Tag>
+                            <Tag>{task.metadata?.diagnosis_mode || task.task_type}</Tag>
+                            <Tag color={task.runtime?.storage === 'postgres' ? 'geekblue' : 'default'}>{task.runtime?.storage || 'sqlite'}</Tag>
+                            <Tag icon={<ClockCircleOutlined />}>{task.runtime?.timeout_seconds ?? '-'} 秒预算</Tag>
+                            {isTaskActive(task) ? <Tag color="processing">实时更新</Tag> : null}
+                            {task.recovery?.restored_from_persistence ? <Tag color="gold">已恢复</Tag> : null}
+                            {task.recovery?.interrupted_by_restart ? <Tag color="red">重启中断</Tag> : null}
+                          </Space>
+                          <div><Text strong>{currentStage}</Text></div>
+                          <div>
+                            <Text type="secondary">
+                              轮次 {task.workflow?.current_round || 0} · 进度 {percentage}% · {task.duration_seconds ? `已运行 ${Math.round(task.duration_seconds)} 秒` : '尚未开始'}
+                            </Text>
+                          </div>
+                          {task.runtime?.target ? <div><Text type="secondary">存储目标：{task.runtime.target}</Text></div> : null}
+                        </div>
+                      </div>
+                    </List.Item>
+                  )
+                }}
+              />
             ) : (
-              <Empty description="暂无设备数据" />
+              <Empty description="暂无诊断任务" />
             )}
           </Card>
         </Col>
-        <Col xs={24} lg={16}>
-          <Card title="实时趋势" className="dashboard-card">
-            <TrendChart />
+
+        <Col xs={24} xl={10}>
+          <Card title="设备健康快照" className="dashboard-card" loading={devicesQuery.isLoading}>
+            <div className="device-grid">
+              {deviceItems.length ? deviceItems.slice(0, 6).map((device) => <DeviceCard key={device.id} device={device} />) : <Empty description="暂无设备" />}
+            </div>
           </Card>
         </Col>
       </Row>
@@ -284,7 +456,12 @@ const Dashboard: React.FC = () => {
       <Row gutter={[16, 16]}>
         <Col xs={24}>
           <Card title="最近告警" className="dashboard-card">
-            <AlertTable alerts={recentAlerts} loading={alertsQuery.isLoading} />
+            <AlertTable
+              alerts={recentAlerts}
+              loading={alertsQuery.isLoading}
+              diagnosing={diagnoseAlertMutation.isPending}
+              onDiagnose={(alertId) => diagnoseAlertMutation.mutate(alertId)}
+            />
           </Card>
         </Col>
       </Row>

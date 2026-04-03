@@ -48,6 +48,20 @@ database:
     path: "data/metadata.db"
   
   # MySQL (生产环境可选)
+  postgres:
+    enabled: true
+    host: "${POSTGRES_HOST:127.0.0.1}"
+    port: ${POSTGRES_PORT:5432}
+    database: "${POSTGRES_DB:jamin_industrial_agent}"
+    user: "${POSTGRES_USER:postgres}"
+    password: "${POSTGRES_PASSWORD:postgres}"
+    schema: "${POSTGRES_SCHEMA:jamin_industrial_agent}"
+    sslmode: "${POSTGRES_SSLMODE:prefer}"
+
+  task_tracking:
+    backend: "${TASK_TRACKING_BACKEND:postgres}"
+    sqlite_path: "data/runtime/tasks.sqlite"
+
   mysql:
     enabled: false
     host: "localhost"
@@ -133,12 +147,61 @@ forecasting:
 # ==================== LLM 与 RAG 配置 ====================
 llm:
   # LLM 服务配置
-  provider: "ollama"         # ollama / transformers / openai_api
+  provider: "openai_api"      # ollama / transformers / openai_api
+
+  # OpenAI 兼容端点配置
+  endpoints:
+    local_qwen:
+      base_url: "${LOCAL_LLM_BASE_URL:http://192.168.0.6:8588/v1}"
+      api_key: "${LOCAL_LLM_API_KEY:none}"
+      timeout_seconds: 45
+    cloud_edgefn:
+      base_url: "${EDGEFN_BASE_URL:https://api.edgefn.net/v1}"
+      api_key: "${EDGEFN_API_KEY}"
+      timeout_seconds: 20
+
+  # Agent 模型路由
+  agent_routing:
+    enabled: true
+    agents:
+      default:
+        endpoint: "local_qwen"
+        model: "Qwen3.5-9B"
+        temperature: 0.2
+      mechanical:
+        endpoint: "local_qwen"
+        model: "Qwen3.5-9B"
+        temperature: 0.2
+      electrical:
+        endpoint: "local_qwen"
+        model: "Qwen3.5-9B"
+        temperature: 0.2
+      process:
+        endpoint: "local_qwen"
+        model: "Qwen3.5-9B"
+        temperature: 0.2
+      sensor:
+        endpoint: "local_qwen"
+        model: "Qwen3.5-9B"
+        temperature: 0.2
+      historical:
+        endpoint: "cloud_edgefn"
+        model: "GLM-5"
+        temperature: 0.1
+      critic:
+        endpoint: "cloud_edgefn"
+        model: "Qwen3-Coder-480B-A35B-Instruct"
+        temperature: 0.1
+      coordinator:
+        endpoint: "cloud_edgefn"
+        model: "DeepSeek-V3.2"
+        temperature: 0.1
   
-  # Ollama 配置 (推荐本地部署)
-  ollama:
-    host: "http://192.168.0.6/v1"
-    model: "Qwen3.5-9B"      # 轻量级中文模型
+  # 兼容旧配置的单模型入口
+  openai_api:
+    base_url: "${LOCAL_LLM_BASE_URL:http://192.168.0.6:8588/v1}"
+    api_key: "${LOCAL_LLM_API_KEY:none}"
+    model: "Qwen3.5-9B"
   
   # Transformers 配置 (本地加载)
   transformers:
