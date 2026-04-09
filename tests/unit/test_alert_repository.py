@@ -1,14 +1,6 @@
-import shutil
-import uuid
 from pathlib import Path
 
 from src.api.repositories.alert_repository import AlertRepository
-
-
-def _make_case_dir() -> Path:
-    case_dir = Path("E:/jamin_industrial_agent/tests/.tmp") / f"alert_repository_{uuid.uuid4().hex[:8]}"
-    case_dir.mkdir(parents=True, exist_ok=True)
-    return case_dir
 
 
 def _make_repo(case_dir: Path) -> AlertRepository:
@@ -20,8 +12,9 @@ def _make_repo(case_dir: Path) -> AlertRepository:
     )
 
 
-def test_alert_repository_seeds_defaults():
-    case_dir = _make_case_dir()
+def test_alert_repository_seeds_defaults(tmp_path):
+    case_dir = tmp_path / "alert_repository"
+    case_dir.mkdir(parents=True, exist_ok=True)
     repo = _make_repo(case_dir)
     repo.init_schema()
     repo.seed_default_rules()
@@ -32,11 +25,11 @@ def test_alert_repository_seeds_defaults():
 
     assert len(rules) == 2
     assert alerts["total"] == 2
-    shutil.rmtree(case_dir, ignore_errors=True)
 
 
-def test_alert_repository_supports_rule_and_alert_lifecycle():
-    case_dir = _make_case_dir()
+def test_alert_repository_supports_rule_and_alert_lifecycle(tmp_path):
+    case_dir = tmp_path / "alert_repository"
+    case_dir.mkdir(parents=True, exist_ok=True)
     repo = _make_repo(case_dir)
     repo.init_schema()
 
@@ -79,10 +72,53 @@ def test_alert_repository_supports_rule_and_alert_lifecycle():
     assert acknowledged["status"] == "acknowledged"
     assert acknowledged["acknowledged_by"] == "tester"
 
-    resolved = repo.resolve_alert(alert_id, tenant_id="default", user_id="tester")
+    resolved = repo.resolve_alert(
+        alert_id,
+        tenant_id="default",
+        user_id="tester",
+        resolution_notes="宸插畬鎴愬缃紝鐜板満鏁板€煎凡鎭㈠",
+    )
     assert resolved["status"] == "resolved"
     assert resolved["resolved_by"] == "tester"
+    assert resolved["resolution_notes"] == "宸插畬鎴愬缃紝鐜板満鏁板€煎凡鎭㈠"
 
     deleted = repo.delete_rule("RULE_TEST_01", tenant_id="default")
     assert deleted is True
-    shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_alert_repository_tracks_diagnosis_and_report_links(tmp_path):
+    case_dir = tmp_path / "alert_repository_links"
+    case_dir.mkdir(parents=True, exist_ok=True)
+    repo = _make_repo(case_dir)
+    repo.init_schema()
+
+    alert_id = repo.create_alert(
+        rule_id=None,
+        message="婧惰В姘ф祿搴︿綆",
+        severity="critical",
+        device_id="DEV_AERATION_01",
+        tag="DO",
+        value=1.6,
+        threshold=2.0,
+        tenant_id="default",
+    )
+
+    linked = repo.link_diagnosis_task(
+        alert_id=alert_id,
+        task_id="TASK_DIAG_001",
+        tenant_id="default",
+        user_id="operator",
+        entrypoint="alert",
+    )
+    assert linked["diagnosis_task_id"] == "TASK_DIAG_001"
+    assert linked["last_action_by"] == "operator"
+
+    updated = repo.attach_report_to_alert(
+        alert_id=alert_id,
+        report_id="RPT_001",
+        tenant_id="default",
+        user_id="operator",
+        task_id="TASK_DIAG_001",
+    )
+    assert updated["latest_report_id"] == "RPT_001"
+    assert updated["latest_report_download_url"] == "/reports/RPT_001/download"

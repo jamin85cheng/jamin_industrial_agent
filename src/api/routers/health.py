@@ -20,9 +20,8 @@ except ImportError:
     psutil = None
 
 router = APIRouter(prefix="/health", tags=["health"])
-
-init_default_checks()
 health_checker = get_health_checker()
+_health_checks_initialized = False
 
 
 def utc_now_iso() -> str:
@@ -30,6 +29,10 @@ def utc_now_iso() -> str:
 
 
 async def _run_checks():
+    global _health_checks_initialized
+    if not _health_checks_initialized:
+        init_default_checks()
+        _health_checks_initialized = True
     return await asyncio.to_thread(health_checker.check)
 
 

@@ -133,6 +133,7 @@ def get_default_config() -> Dict[str, Any]:
                 'host': '127.0.0.1',
                 'port': 5432,
                 'database': 'jamin_industrial_agent',
+                'maintenance_database': 'postgres',
                 'user': 'postgres',
                 'password': 'postgres',
                 'schema': 'jamin_industrial_agent',
@@ -146,6 +147,33 @@ def get_default_config() -> Dict[str, Any]:
         'rules': {
             'config_file': 'config/rules.json',
             'evaluation_interval': 10
+        },
+        'diagnosis': {
+            'execution': {
+                'backend': 'background_tasks',
+                'asyncio_workers': 2,
+                'auto_resume_recovered': False,
+            }
+        },
+        'intelligence': {
+            'default_scene': 'dust',
+            'snapshot_history_limit': 36,
+            'stale_after_seconds': 600,
+            'knowledge_top_k': 4,
+            'patrol': {
+                'interval_seconds': 180,
+                'run_on_startup': False,
+            },
+            'learning': {
+                'min_confirmed_labels_for_candidate': 3,
+                'min_confirmed_labels_for_model_candidate': 12,
+                'min_external_grounding_ratio': 0.3,
+            },
+            'llm': {
+                'enabled': False,
+                'temperature': 0.1,
+                'max_tokens': 450,
+            },
         },
         'logging': {
             'level': 'INFO',

@@ -22,6 +22,7 @@ const percent = (value?: number) => Math.round((value || 0) * 100)
 
 const statusLabel = (value?: string) => {
   const labels: Record<string, string> = {
+    queued: '排队中',
     pending: '排队中',
     running: '运行中',
     completed: '已完成',

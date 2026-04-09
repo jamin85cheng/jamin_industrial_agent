@@ -3,6 +3,7 @@ import { Layout, Menu, theme, Badge, Avatar, Dropdown, Button, Typography, messa
 import {
   DashboardOutlined,
   AlertOutlined,
+  RadarChartOutlined,
   RobotOutlined,
   FileTextOutlined,
   SettingOutlined,
@@ -15,6 +16,7 @@ import {
 import type { MenuProps } from 'antd'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../stores/auth'
+import { authApi } from '../../lib/api'
 
 const { Header, Sider } = Layout
 const { Text } = Typography
@@ -23,57 +25,62 @@ interface MainLayoutProps {
   children: React.ReactNode
 }
 
-const menuItems: MenuProps['items'] = [
-  {
-    key: '/dashboard',
-    icon: <DashboardOutlined />,
-    label: '运营总览',
-  },
-  {
-    key: '/alerts',
-    icon: <AlertOutlined />,
-    label: (
-      <span>
-        告警中心
-        <Badge count={3} size="small" style={{ marginLeft: 8 }} />
-      </span>
-    ),
-  },
-  {
-    key: '/diagnosis',
-    icon: <RobotOutlined />,
-    label: '智能诊断',
-  },
-  {
-    key: '/rules',
-    icon: <FileTextOutlined />,
-    label: '规则管理',
-  },
-  {
-    key: '/config',
-    icon: <SettingOutlined />,
-    label: '系统配置',
-  },
-]
-
-const userMenuItems: MenuProps['items'] = [
-  {
-    key: 'profile',
-    icon: <UserOutlined />,
-    label: '个人中心',
-  },
-  {
-    key: 'logout',
-    icon: <LogoutOutlined />,
-    label: '退出登录',
-  },
-]
-
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, logout } = useAuthStore()
+  const { user, refreshToken, logout } = useAuthStore()
+
+  const menuItems: MenuProps['items'] = [
+    {
+      key: '/dashboard',
+      icon: <DashboardOutlined />,
+      label: '运营总览',
+    },
+    {
+      key: '/alerts',
+      icon: <AlertOutlined />,
+      label: (
+        <span>
+          告警中心
+          <Badge count={3} size="small" style={{ marginLeft: 8 }} />
+        </span>
+      ),
+    },
+    {
+      key: '/diagnosis',
+      icon: <RobotOutlined />,
+      label: '智能诊断',
+    },
+    {
+      key: '/intelligence',
+      icon: <RadarChartOutlined />,
+      label: '智能巡检',
+    },
+    {
+      key: '/rules',
+      icon: <FileTextOutlined />,
+      label: '规则管理',
+    },
+    {
+      key: '/config',
+      icon: <SettingOutlined />,
+      label: '系统配置',
+    },
+  ]
+
+  const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      icon: <UserOutlined />,
+      label: '个人中心',
+    },
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: '退出登录',
+    },
+  ]
 
   const {
     token: { colorBgContainer },
@@ -81,13 +88,14 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'logout') {
+      void authApi.logout(refreshToken).catch(() => undefined)
       logout()
       navigate('/login', { replace: true })
       return
     }
 
     if (key === 'profile') {
-      message.info('个人中心功能正在开发中')
+      message.info('个人中心正在整理中，后续会补充个人资料与权限查看能力。')
       return
     }
 
@@ -164,7 +172,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                   <span>{user?.username || '用户'}</span>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {user?.role || 'guest'}
+                    {(user?.role || 'guest').toUpperCase()}
+                    {user?.tenant_id ? ` · ${user.tenant_id}` : ''}
                   </Text>
                 </div>
               </div>

@@ -1,10 +1,10 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, message } from 'antd'
-import { BellOutlined, CheckCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { BellOutlined, CheckCircleOutlined, FileTextOutlined, PlayCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { TableProps } from 'antd'
-import { alertsApi, diagnosisV2Api, extractApiError, type AlertRecord } from '../../lib/api'
+import { alertsApi, diagnosisV2Api, extractApiError, reportsApi, type AlertRecord } from '../../lib/api'
 
 const severityMeta: Record<AlertRecord['severity'], { color: string; label: string }> = {
   critical: { color: 'red', label: '严重' },
@@ -14,8 +14,8 @@ const severityMeta: Record<AlertRecord['severity'], { color: string; label: stri
 
 const statusMeta: Record<AlertRecord['status'], { color: string; label: string }> = {
   active: { color: 'processing', label: '待确认' },
-  acknowledged: { color: 'success', label: '已确认' },
-  resolved: { color: 'default', label: '已解决' },
+  acknowledged: { color: 'gold', label: '已确认' },
+  resolved: { color: 'success', label: '已解决' },
 }
 
 const Alerts: React.FC = () => {
@@ -32,15 +32,32 @@ const Alerts: React.FC = () => {
     queryFn: alertsApi.stats,
   })
 
+  const invalidateAlerts = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['alerts'] }),
+      queryClient.invalidateQueries({ queryKey: ['alerts', 'stats'] }),
+    ])
+  }
+
   const acknowledgeMutation = useMutation({
-    mutationFn: (alertId: string) => alertsApi.acknowledge(alertId),
-    onSuccess: () => {
+    mutationFn: (alertId: string) => alertsApi.acknowledge(alertId, 'Confirmed from alert console'),
+    onSuccess: async () => {
       message.success('告警已确认')
-      void queryClient.invalidateQueries({ queryKey: ['alerts'] })
-      void queryClient.invalidateQueries({ queryKey: ['alerts', 'stats'] })
+      await invalidateAlerts()
     },
     onError: (error) => {
       message.error(extractApiError(error, '确认告警失败'))
+    },
+  })
+
+  const resolveMutation = useMutation({
+    mutationFn: (alertId: string) => alertsApi.resolve(alertId, 'Resolved from alert console'),
+    onSuccess: async () => {
+      message.success('告警已解决')
+      await invalidateAlerts()
+    },
+    onError: (error) => {
+      message.error(extractApiError(error, '解决告警失败'))
     },
   })
 
@@ -52,12 +69,13 @@ const Alerts: React.FC = () => {
         debug: true,
         priority: 'high',
       }),
-    onSuccess: (response, alertId) => {
+    onSuccess: async (response, alertId) => {
       if (!response.task_id) {
         message.warning('诊断任务已创建，但未返回任务编号')
         return
       }
-      message.success(`已从告警 ${alertId} 发起多智能体诊断`)
+      await invalidateAlerts()
+      message.success(`已从告警 ${alertId} 发起诊断`)
       navigate(`/diagnosis?taskId=${encodeURIComponent(response.task_id)}`)
     },
     onError: (error) => {
@@ -67,18 +85,27 @@ const Alerts: React.FC = () => {
 
   const alerts = alertsQuery.data?.alerts ?? []
 
+  const handleDownloadReport = async (reportId: string) => {
+    try {
+      await reportsApi.download(reportId)
+      message.success('报告下载已开始')
+    } catch (error) {
+      message.error(extractApiError(error, '下载报告失败'))
+    }
+  }
+
   const columns: TableProps<AlertRecord>['columns'] = [
     {
       title: '告警 ID',
       dataIndex: 'id',
       key: 'id',
-      width: 190,
+      width: 180,
     },
     {
       title: '级别',
       dataIndex: 'severity',
       key: 'severity',
-      width: 100,
+      width: 96,
       render: (severity: AlertRecord['severity']) => {
         const meta = severityMeta[severity]
         return <Tag color={meta.color}>{meta.label}</Tag>
@@ -88,6 +115,7 @@ const Alerts: React.FC = () => {
       title: '规则名称',
       dataIndex: 'rule_name',
       key: 'rule_name',
+      width: 180,
       render: (value: string | null | undefined) => value || '-',
     },
     {
@@ -99,30 +127,58 @@ const Alerts: React.FC = () => {
       title: '设备',
       dataIndex: 'device_id',
       key: 'device_id',
-      width: 160,
+      width: 150,
       render: (value: string | null | undefined) => value || '-',
-    },
-    {
-      title: '时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 180,
-      render: (value: string) => new Date(value).toLocaleString(),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 110,
       render: (status: AlertRecord['status']) => {
         const meta = statusMeta[status]
-        return status === 'active' ? <Badge status={meta.color as 'processing'} text={meta.label} /> : <Tag color={meta.color}>{meta.label}</Tag>
+        return status === 'active' ? <Badge status="processing" text={meta.label} /> : <Tag color={meta.color}>{meta.label}</Tag>
       },
+    },
+    {
+      title: '诊断任务',
+      dataIndex: 'diagnosis_task_id',
+      key: 'diagnosis_task_id',
+      width: 160,
+      render: (value: string | null | undefined) =>
+        value ? (
+          <Button type="link" size="small" onClick={() => navigate(`/diagnosis?taskId=${encodeURIComponent(value)}`)}>
+            查看任务
+          </Button>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      title: '最近报告',
+      dataIndex: 'latest_report_id',
+      key: 'latest_report_id',
+      width: 150,
+      render: (value: string | null | undefined) =>
+        value ? (
+          <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleDownloadReport(value)}>
+            下载报告
+          </Button>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      title: '最后处理时间',
+      dataIndex: 'last_action_at',
+      key: 'last_action_at',
+      width: 180,
+      render: (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : '-'),
     },
     {
       title: '操作',
       key: 'action',
-      width: 240,
+      width: 320,
       render: (_, record) => (
         <Space wrap>
           <Button
@@ -144,7 +200,27 @@ const Alerts: React.FC = () => {
               确认
             </Button>
           ) : null}
-          <Button size="small" onClick={() => message.info(record.message)}>
+          {record.status !== 'resolved' ? (
+            <Button
+              size="small"
+              icon={<PlayCircleOutlined />}
+              loading={resolveMutation.isPending}
+              onClick={() => resolveMutation.mutate(record.id)}
+            >
+              解决
+            </Button>
+          ) : null}
+          <Button
+            size="small"
+            onClick={() =>
+              message.info({
+                content: record.resolution_notes
+                  ? `${record.message}\n处理备注：${record.resolution_notes}`
+                  : record.message,
+                duration: 4,
+              })
+            }
+          >
             详情
           </Button>
         </Space>
@@ -168,7 +244,7 @@ const Alerts: React.FC = () => {
         <Col xs={24} md={8}>
           <Card loading={statsQuery.isLoading}>
             <Statistic
-              title="已确认 / 已解决"
+              title="已处理"
               value={(statsQuery.data?.total_alerts ?? 0) - (statsQuery.data?.active_alerts ?? 0)}
               valueStyle={{ color: '#52c41a' }}
             />
@@ -179,19 +255,19 @@ const Alerts: React.FC = () => {
       <Card
         title={
           <span>
-            <BellOutlined /> 告警列表
+            <BellOutlined /> 告警工作台
           </span>
         }
         extra={
           <Space wrap>
             <Button
               onClick={() => {
-                const firstActiveAlert = alerts.find((item) => item.status === 'active')
-                if (!firstActiveAlert) {
+                const firstPendingAlert = alerts.find((item) => item.status === 'active')
+                if (!firstPendingAlert) {
                   message.info('当前没有待确认告警')
                   return
                 }
-                acknowledgeMutation.mutate(firstActiveAlert.id)
+                acknowledgeMutation.mutate(firstPendingAlert.id)
               }}
               disabled={!alerts.some((item) => item.status === 'active')}
             >
@@ -211,9 +287,6 @@ const Alerts: React.FC = () => {
             >
               从最新告警发起诊断
             </Button>
-            <Button type="primary" onClick={() => message.success('导出能力将与报告服务统一整合后开放')}>
-              导出报表
-            </Button>
           </Space>
         }
       >
@@ -223,6 +296,7 @@ const Alerts: React.FC = () => {
           rowKey="id"
           loading={alertsQuery.isLoading}
           locale={{ emptyText: <Empty description="暂无告警数据" /> }}
+          scroll={{ x: 1380 }}
         />
       </Card>
     </div>

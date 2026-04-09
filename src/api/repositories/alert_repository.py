@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from src.utils.config import load_config
 from src.utils.database_runtime import build_runtime_database_adapter
+from src.utils.runtime_migrations import apply_runtime_schema_migrations
 
 
 def utc_now() -> datetime:
@@ -75,88 +76,133 @@ class AlertRepository:
         rows = self._fetch_all(cursor)
         return rows[0] if rows else None
 
+    def _sqlite_columns(self, connection, table_name: str) -> List[str]:
+        cursor = connection.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return [str(row[1]) for row in cursor.fetchall()]
+
+    def _ensure_sqlite_column(self, connection, table_name: str, column_name: str, column_definition: str) -> None:
+        if column_name in self._sqlite_columns(connection, table_name):
+            return
+        cursor = connection.cursor()
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+    def _ensure_alert_extensions(self, connection) -> None:
+        cursor = connection.cursor()
+        if self.backend == "postgres":
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".alerts ADD COLUMN IF NOT EXISTS diagnosis_task_id TEXT NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".alerts ADD COLUMN IF NOT EXISTS latest_report_id TEXT NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".alerts ADD COLUMN IF NOT EXISTS last_action_by TEXT NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".alerts ADD COLUMN IF NOT EXISTS last_action_at TIMESTAMPTZ NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".alerts ADD COLUMN IF NOT EXISTS resolution_notes TEXT NULL'
+            )
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{self.schema}".alert_task_links (
+                    link_id TEXT PRIMARY KEY,
+                    alert_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    report_id TEXT NULL,
+                    linked_at TIMESTAMPTZ NOT NULL,
+                    linked_by TEXT NULL,
+                    entrypoint TEXT NULL,
+                    tenant_id TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                f'CREATE INDEX IF NOT EXISTS "{self.schema}_alert_task_links_alert_idx" ON "{self.schema}".alert_task_links(alert_id, linked_at DESC)'
+            )
+            cursor.execute(
+                f'CREATE INDEX IF NOT EXISTS "{self.schema}_alert_task_links_task_idx" ON "{self.schema}".alert_task_links(task_id)'
+            )
+            return
+
+        self._ensure_sqlite_column(connection, "alerts", "diagnosis_task_id", "diagnosis_task_id TEXT NULL")
+        self._ensure_sqlite_column(connection, "alerts", "latest_report_id", "latest_report_id TEXT NULL")
+        self._ensure_sqlite_column(connection, "alerts", "last_action_by", "last_action_by TEXT NULL")
+        self._ensure_sqlite_column(connection, "alerts", "last_action_at", "last_action_at TEXT NULL")
+        self._ensure_sqlite_column(connection, "alerts", "resolution_notes", "resolution_notes TEXT NULL")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_task_links (
+                link_id TEXT PRIMARY KEY,
+                alert_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                report_id TEXT NULL,
+                linked_at TEXT NOT NULL,
+                linked_by TEXT NULL,
+                entrypoint TEXT NULL,
+                tenant_id TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alert_task_links_alert ON alert_task_links(alert_id, linked_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alert_task_links_task ON alert_task_links(task_id)"
+        )
+
     def init_schema(self) -> None:
+        if self.backend == "postgres":
+            apply_runtime_schema_migrations(self.db_config)
+            return
         with self._connect() as connection:
             cursor = connection.cursor()
-            if self.backend == "postgres":
-                cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS "{self.schema}".alert_rules (
-                        rule_id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        condition_json JSONB NOT NULL,
-                        severity TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        suppression_window_minutes INTEGER NOT NULL DEFAULT 30,
-                        created_at TIMESTAMPTZ NULL,
-                        tenant_id TEXT NOT NULL
-                    )
-                    """
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alert_rules (
+                    rule_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    condition_json TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    suppression_window_minutes INTEGER NOT NULL DEFAULT 30,
+                    created_at TEXT NULL,
+                    tenant_id TEXT NOT NULL
                 )
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS "{self.schema}".alerts (
-                        id TEXT PRIMARY KEY,
-                        rule_id TEXT NULL,
-                        rule_name TEXT NULL,
-                        severity TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        device_id TEXT NULL,
-                        tag TEXT NULL,
-                        value DOUBLE PRECISION NULL,
-                        threshold DOUBLE PRECISION NULL,
-                        status TEXT NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL,
-                        acknowledged_by TEXT NULL,
-                        acknowledged_at TIMESTAMPTZ NULL,
-                        acknowledge_comment TEXT NULL,
-                        resolved_at TIMESTAMPTZ NULL,
-                        resolved_by TEXT NULL,
-                        tenant_id TEXT NOT NULL
-                    )
-                    """
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id TEXT PRIMARY KEY,
+                    rule_id TEXT NULL,
+                    rule_name TEXT NULL,
+                    severity TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    device_id TEXT NULL,
+                    tag TEXT NULL,
+                    value REAL NULL,
+                    threshold REAL NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    acknowledged_by TEXT NULL,
+                    acknowledged_at TEXT NULL,
+                    acknowledge_comment TEXT NULL,
+                    resolved_at TEXT NULL,
+                    resolved_by TEXT NULL,
+                    diagnosis_task_id TEXT NULL,
+                    latest_report_id TEXT NULL,
+                    last_action_by TEXT NULL,
+                    last_action_at TEXT NULL,
+                    resolution_notes TEXT NULL,
+                    tenant_id TEXT NOT NULL
                 )
-            else:
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS alert_rules (
-                        rule_id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        enabled INTEGER NOT NULL DEFAULT 1,
-                        condition_json TEXT NOT NULL,
-                        severity TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        suppression_window_minutes INTEGER NOT NULL DEFAULT 30,
-                        created_at TEXT NULL,
-                        tenant_id TEXT NOT NULL
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS alerts (
-                        id TEXT PRIMARY KEY,
-                        rule_id TEXT NULL,
-                        rule_name TEXT NULL,
-                        severity TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        device_id TEXT NULL,
-                        tag TEXT NULL,
-                        value REAL NULL,
-                        threshold REAL NULL,
-                        status TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        acknowledged_by TEXT NULL,
-                        acknowledged_at TEXT NULL,
-                        acknowledge_comment TEXT NULL,
-                        resolved_at TEXT NULL,
-                        resolved_by TEXT NULL,
-                        tenant_id TEXT NOT NULL
-                    )
-                    """
-                )
+                """
+            )
+            self._ensure_alert_extensions(connection)
             connection.commit()
 
     def seed_default_rules(self, tenant_id: str = "default") -> None:
@@ -230,8 +276,10 @@ class AlertRepository:
 
     def _normalize_alert(self, row: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(row)
-        for key in ("created_at", "acknowledged_at", "resolved_at"):
+        for key in ("created_at", "acknowledged_at", "resolved_at", "last_action_at"):
             normalized[key] = _parse_datetime(normalized.get(key))
+        if normalized.get("latest_report_id"):
+            normalized["latest_report_download_url"] = f"/reports/{normalized['latest_report_id']}/download"
         return normalized
 
     def list_rules(self, *, tenant_id: str, enabled_only: bool = False) -> List[Dict[str, Any]]:
@@ -489,7 +537,9 @@ class AlertRepository:
             f"status = {self._placeholder()}, "
             f"acknowledged_by = {self._placeholder()}, "
             f"acknowledged_at = {self._placeholder()}, "
-            f"acknowledge_comment = {self._placeholder()} "
+            f"acknowledge_comment = {self._placeholder()}, "
+            f"last_action_by = {self._placeholder()}, "
+            f"last_action_at = {self._placeholder()} "
             f"WHERE id = {self._placeholder()} AND tenant_id = {self._placeholder()}"
         )
         params = (
@@ -497,6 +547,8 @@ class AlertRepository:
             user_id,
             acknowledged_at.isoformat() if self.backend == "sqlite" else acknowledged_at,
             comment,
+            user_id,
+            acknowledged_at.isoformat() if self.backend == "sqlite" else acknowledged_at,
             alert_id,
             tenant_id,
         )
@@ -506,7 +558,14 @@ class AlertRepository:
             connection.commit()
         return self.get_alert(alert_id, tenant_id=tenant_id)
 
-    def resolve_alert(self, alert_id: str, *, tenant_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def resolve_alert(
+        self,
+        alert_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        resolution_notes: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not self.get_alert(alert_id, tenant_id=tenant_id):
             return None
         resolved_at = utc_now()
@@ -514,11 +573,17 @@ class AlertRepository:
             f"UPDATE {self._table('alerts')} SET "
             f"status = {self._placeholder()}, "
             f"resolved_by = {self._placeholder()}, "
-            f"resolved_at = {self._placeholder()} "
+            f"resolved_at = {self._placeholder()}, "
+            f"resolution_notes = {self._placeholder()}, "
+            f"last_action_by = {self._placeholder()}, "
+            f"last_action_at = {self._placeholder()} "
             f"WHERE id = {self._placeholder()} AND tenant_id = {self._placeholder()}"
         )
         params = (
             "resolved",
+            user_id,
+            resolved_at.isoformat() if self.backend == "sqlite" else resolved_at,
+            resolution_notes,
             user_id,
             resolved_at.isoformat() if self.backend == "sqlite" else resolved_at,
             alert_id,
@@ -530,3 +595,96 @@ class AlertRepository:
             connection.commit()
         return self.get_alert(alert_id, tenant_id=tenant_id)
 
+    def link_diagnosis_task(
+        self,
+        *,
+        alert_id: str,
+        task_id: str,
+        tenant_id: str,
+        user_id: Optional[str],
+        entrypoint: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.get_alert(alert_id, tenant_id=tenant_id):
+            return None
+        linked_at = utc_now()
+        link_id = f"ATL_{uuid.uuid4().hex[:12].upper()}"
+        with self._connect() as connection:
+            cursor = connection.cursor()
+            if self.backend == "postgres":
+                cursor.execute(
+                    f"""
+                    INSERT INTO "{self.schema}".alert_task_links (
+                        link_id, alert_id, task_id, report_id, linked_at, linked_by, entrypoint, tenant_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (link_id, alert_id, task_id, None, linked_at, user_id, entrypoint, tenant_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO alert_task_links (
+                        link_id, alert_id, task_id, report_id, linked_at, linked_by, entrypoint, tenant_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (link_id, alert_id, task_id, None, linked_at.isoformat(), user_id, entrypoint, tenant_id),
+                )
+            cursor.execute(
+                (
+                    f"UPDATE {self._table('alerts')} SET "
+                    f"diagnosis_task_id = {self._placeholder()}, "
+                    f"last_action_by = {self._placeholder()}, "
+                    f"last_action_at = {self._placeholder()} "
+                    f"WHERE id = {self._placeholder()} AND tenant_id = {self._placeholder()}"
+                ),
+                (
+                    task_id,
+                    user_id,
+                    linked_at.isoformat() if self.backend == "sqlite" else linked_at,
+                    alert_id,
+                    tenant_id,
+                ),
+            )
+            connection.commit()
+        return self.get_alert(alert_id, tenant_id=tenant_id)
+
+    def attach_report_to_alert(
+        self,
+        *,
+        alert_id: str,
+        report_id: str,
+        tenant_id: str,
+        user_id: Optional[str],
+        task_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.get_alert(alert_id, tenant_id=tenant_id):
+            return None
+        linked_at = utc_now()
+        with self._connect() as connection:
+            cursor = connection.cursor()
+            if task_id:
+                cursor.execute(
+                    (
+                        f"UPDATE {self._table('alert_task_links')} SET "
+                        f"report_id = {self._placeholder()} "
+                        f"WHERE alert_id = {self._placeholder()} AND task_id = {self._placeholder()} AND tenant_id = {self._placeholder()}"
+                    ),
+                    (report_id, alert_id, task_id, tenant_id),
+                )
+            cursor.execute(
+                (
+                    f"UPDATE {self._table('alerts')} SET "
+                    f"latest_report_id = {self._placeholder()}, "
+                    f"last_action_by = {self._placeholder()}, "
+                    f"last_action_at = {self._placeholder()} "
+                    f"WHERE id = {self._placeholder()} AND tenant_id = {self._placeholder()}"
+                ),
+                (
+                    report_id,
+                    user_id,
+                    linked_at.isoformat() if self.backend == "sqlite" else linked_at,
+                    alert_id,
+                    tenant_id,
+                ),
+            )
+            connection.commit()
+        return self.get_alert(alert_id, tenant_id=tenant_id)

@@ -31,6 +31,7 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
 
 class TaskStatus(Enum):
     PENDING = "pending"
+    QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -138,7 +139,22 @@ class TrackedTask:
         return (end - self.started_at).total_seconds()
 
     def is_active(self) -> bool:
-        return self.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED}
+        return self.status in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSED}
+
+    def can_cancel(self) -> bool:
+        return self.status in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSED}
+
+    def can_retry(self) -> bool:
+        return self.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}
+
+    def can_resume(self) -> bool:
+        recovery = dict(self.metadata.get("recovery") or {})
+        recoverable_state = bool((self.metadata.get("task_runtime") or {}).get("recoverable_state", False))
+        return bool(
+            recoverable_state
+            and self.status == TaskStatus.QUEUED
+            and (recovery.get("restored_from_persistence") or recovery.get("resume_required"))
+        )
 
 
 class TaskTracker:
@@ -196,11 +212,23 @@ class TaskTracker:
     def _load_tasks(self) -> None:
         for payload in self._persistence_backend.load_payloads():
             task = TrackedTask.from_dict(payload)
-            if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED}:
+            recovery = task.metadata.setdefault("recovery", {})
+            task_runtime = dict(task.metadata.get("task_runtime") or {})
+            recoverable_state = bool(task_runtime.get("recoverable_state", False))
+
+            if task.status in {TaskStatus.PENDING, TaskStatus.QUEUED} and recoverable_state:
+                task.status = TaskStatus.QUEUED
+                recovery["restored_from_persistence"] = True
+                recovery["resume_required"] = True
+                task.metadata.setdefault("workflow", {})
+                task.metadata["workflow"]["status"] = "queued"
+                task.metadata["workflow"]["current_stage"] = "queued"
+                task.progress.current_action = task.progress.current_action or "Awaiting manual resume"
+            elif task.status in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSED}:
                 task.status = TaskStatus.FAILED
                 task.error = "Task interrupted because the tracker process restarted."
                 task.completed_at = utc_now()
-                task.metadata.setdefault("recovery", {})["restored_from_persistence"] = True
+                recovery["restored_from_persistence"] = True
             self._tasks.set(task.task_id, task)
             self._persist_task(task)
 
@@ -216,8 +244,10 @@ class TaskTracker:
         tasks = self._tasks.values()
         return {
             "total_created": len(tasks),
+            "total_queued": sum(1 for item in tasks if item.status == TaskStatus.QUEUED),
             "total_completed": sum(1 for item in tasks if item.status == TaskStatus.COMPLETED),
             "total_failed": sum(1 for item in tasks if item.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}),
+            "total_cancelled": sum(1 for item in tasks if item.status == TaskStatus.CANCELLED),
         }
 
     def create_task(
@@ -229,6 +259,11 @@ class TaskTracker:
         parent_task_id: Optional[str] = None,
     ) -> TrackedTask:
         metadata = dict(metadata or {})
+        metadata.setdefault("retry_count", int(metadata.get("retry_count", 0) or 0))
+        metadata.setdefault("retry_of_task_id", metadata.get("retry_of_task_id"))
+        metadata.setdefault("cancel_requested_at", metadata.get("cancel_requested_at"))
+        metadata.setdefault("cancelled_by", metadata.get("cancelled_by"))
+        metadata.setdefault("cancellation_reason", metadata.get("cancellation_reason"))
         metadata.setdefault(
                 "task_runtime",
                 {
@@ -257,7 +292,16 @@ class TaskTracker:
         return task
 
     async def execute(self, task: TrackedTask, coro_func: Callable, *args, **kwargs) -> Any:
+        if task.status == TaskStatus.CANCELLED:
+            self._persist_task(task)
+            logger.info(f"skipped execution for cancelled task {task.task_id}")
+            return task.result
+
         async with self._semaphore:
+            if task.status == TaskStatus.CANCELLED:
+                self._persist_task(task)
+                logger.info(f"skipped execution for cancelled task {task.task_id}")
+                return task.result
             task.status = TaskStatus.RUNNING
             task.started_at = utc_now()
             self._persist_task(task)
@@ -276,6 +320,15 @@ class TaskTracker:
                 self._trigger_event("complete", task)
                 logger.info(f"completed task {task.task_id}")
                 return result
+            except asyncio.CancelledError:
+                if task.status != TaskStatus.CANCELLED:
+                    task.status = TaskStatus.CANCELLED
+                    task.error = task.error or "Task cancelled by user."
+                    task.completed_at = utc_now()
+                    self._stats["total_cancelled"] += 1
+                self._persist_task(task)
+                logger.info(f"task cancelled {task.task_id}")
+                raise
             except asyncio.TimeoutError:
                 task.status = TaskStatus.TIMEOUT
                 task.error = "Task execution timed out."
@@ -311,6 +364,8 @@ class TaskTracker:
         task = self._tasks.get(task_id)
         if not task:
             return
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}:
+            return
         if step is not None:
             task.progress.current_step = step
         if action is not None:
@@ -336,6 +391,26 @@ class TaskTracker:
             "duration_seconds": task.duration_seconds(),
         }
 
+    def mark_task_queued(self, task_id: str, *, action: Optional[str] = None) -> Optional[TrackedTask]:
+        task = self._tasks.get(task_id)
+        if not task:
+            return None
+        if task.status == TaskStatus.CANCELLED:
+            self._persist_task(task)
+            return task
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.RUNNING, TaskStatus.PAUSED}:
+            return task
+
+        task.status = TaskStatus.QUEUED
+        workflow = task.metadata.setdefault("workflow", {})
+        workflow["status"] = "queued"
+        workflow["current_stage"] = "queued"
+        if action is not None:
+            task.progress.current_action = action
+        task.progress.percentage = min(float(task.progress.percentage or 0.0), 1.0)
+        self._persist_task(task)
+        return task
+
     def list_tasks(
         self,
         status: Optional[TaskStatus] = None,
@@ -349,13 +424,29 @@ class TaskTracker:
             if task_type and task.task_type != task_type:
                 continue
             tasks.append(task)
-        tasks.sort(key=lambda item: (item.priority.value, item.created_at.timestamp()), reverse=True)
+        tasks.sort(key=lambda item: (item.priority.value, -item.created_at.timestamp()))
         return tasks[:limit]
 
-    async def cancel_task(self, task_id: str) -> bool:
+    async def cancel_task(
+        self,
+        task_id: str,
+        *,
+        cancelled_by: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Optional[TrackedTask]:
         task = self._tasks.get(task_id)
         if not task:
-            return False
+            return None
+        if task.status == TaskStatus.CANCELLED:
+            return task
+        if not task.can_cancel():
+            return None
+
+        cancellation_timestamp = utc_now()
+        task.metadata["cancel_requested_at"] = cancellation_timestamp.isoformat()
+        task.metadata["cancelled_by"] = cancelled_by
+        task.metadata["cancellation_reason"] = reason
+        task.progress.current_action = "Cancellation requested"
         running_task = self._running_tasks.get(task_id)
         if running_task:
             running_task.cancel()
@@ -364,10 +455,12 @@ class TaskTracker:
             except asyncio.CancelledError:
                 pass
         task.status = TaskStatus.CANCELLED
-        task.completed_at = utc_now()
+        task.error = reason or "Task cancelled by user."
+        task.completed_at = task.completed_at or cancellation_timestamp
+        self._stats["total_cancelled"] += 1
         self._persist_task(task)
         logger.info(f"cancelled task {task_id}")
-        return True
+        return task
 
     def add_listener(self, event_type: str, callback: Callable) -> None:
         if event_type in self._listeners:
@@ -387,8 +480,10 @@ class TaskTracker:
         total_finished = self._stats["total_completed"] + self._stats["total_failed"]
         return {
             "total_created": self._stats["total_created"],
+            "total_queued": sum(1 for task in self._tasks.values() if task.status == TaskStatus.QUEUED),
             "total_completed": self._stats["total_completed"],
             "total_failed": self._stats["total_failed"],
+            "total_cancelled": self._stats["total_cancelled"],
             "active_tasks": sum(1 for task in self._tasks.values() if task.is_active()),
             "running_tasks": len(self._running_tasks),
             "success_rate": (self._stats["total_completed"] / total_finished) if total_finished else 0.0,

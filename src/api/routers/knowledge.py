@@ -1,24 +1,24 @@
-"""
-知识库API路由
+"""Knowledge operations API backed by persisted intelligence cases."""
 
-实现知识搜索、智能诊断等接口
-"""
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Dict, Any
+import uuid
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import (
-    get_current_user, require_permissions,
-    UserContext
-)
+from src.api.dependencies import UserContext, require_permissions
+from src.intelligence.runtime import get_intelligence_service
+from src.utils.structured_logging import get_logger
 
-router = APIRouter(prefix="/knowledge", tags=["知识库"])
+router = APIRouter(prefix="/knowledge", tags=["Knowledge"])
+audit_logger = get_logger("knowledge_audit")
 
 
-# Pydantic模型
 class KnowledgeDoc(BaseModel):
-    """知识文档"""
+    """Knowledge document projected from persisted intelligence cases."""
+
     id: str
     title: str
     content: str
@@ -28,21 +28,24 @@ class KnowledgeDoc(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """搜索请求"""
+    """Knowledge search request."""
+
     query: str = Field(..., min_length=1)
     limit: int = Field(default=5, ge=1, le=20)
-    category: Optional[str] = None
+    category: Optional[str] = Field(default=None, max_length=64)
 
 
 class DiagnoseRequest(BaseModel):
-    """诊断请求"""
+    """Knowledge-assisted diagnosis request."""
+
     symptoms: str = Field(..., min_length=5)
     device_id: Optional[str] = None
-    tags: Optional[Dict[str, float]] = None
+    tags: Optional[Dict[str, Any]] = None
 
 
 class DiagnoseResponse(BaseModel):
-    """诊断响应"""
+    """Knowledge-assisted diagnosis response."""
+
     diagnosis_id: str
     root_cause: str
     confidence: float
@@ -51,269 +54,225 @@ class DiagnoseResponse(BaseModel):
     references: List[KnowledgeDoc]
 
 
-# 模拟知识库数据
-_knowledge_base = {
-    "DOC_001": {
-        "id": "DOC_001",
-        "title": "曝气池溶解氧异常处理",
-        "content": """
-当曝气池溶解氧浓度低于2mg/L时，可能的原因包括：
-1. 曝气盘堵塞或损坏
-2. 风机故障或风量不足
-3. DO传感器需要校准
-4. 进水负荷突然增加
+def _case_to_doc(case: Dict[str, Any], *, include_full_content: bool = False) -> KnowledgeDoc:
+    content = str(case.get("content") or case.get("summary") or "").strip()
+    if not include_full_content and len(content) > 280:
+        content = f"{content[:277]}..."
 
-处理措施：
-1. 检查并清洗曝气盘
-2. 检查风机运行状态
-3. 校准DO传感器
-4. 调整进水流量
-        """,
-        "category": "异常处理",
-        "tags": ["曝气池", "溶解氧", "DO", "故障处理"]
-    },
-    "DOC_002": {
-        "id": "DOC_002",
-        "title": "污泥膨胀预防与控制",
-        "content": """
-污泥膨胀的主要症状：
-- 污泥沉降性能差
-- SVI值超过200
-- 出水浑浊
+    score = case.get("score")
+    similarity = None
+    if score is not None:
+        similarity = round(min(float(score) / 20.0, 1.0), 2)
 
-预防措施：
-1. 控制营养物质比例（BOD:N:P = 100:5:1）
-2. 维持适当的溶解氧（2-4mg/L）
-3. 控制污泥龄
-4. 定期排泥
+    return KnowledgeDoc(
+        id=str(case.get("case_id")),
+        title=str(case.get("title") or "Untitled knowledge case"),
+        content=content,
+        category=str(case.get("scene_type") or "general"),
+        tags=[str(tag) for tag in (case.get("tags") or []) if str(tag).strip()],
+        similarity_score=similarity,
+    )
 
-应急处理：
-1. 投加絮凝剂
-2. 调整曝气量
-3. 加大排泥量
-        """,
-        "category": "工艺控制",
-        "tags": ["污泥膨胀", "SVI", "沉降性", "工艺控制"]
-    },
-    "DOC_003": {
-        "id": "DOC_003",
-        "title": "泵类设备维护保养",
-        "content": """
-日常维护项目：
-1. 检查轴承温度和振动
-2. 检查密封是否泄漏
-3. 检查电机电流
-4. 清洁过滤器
 
-定期保养（每月）：
-1. 更换润滑油
-2. 检查联轴器
-3. 紧固螺栓
+def _resolve_scene_type(request: DiagnoseRequest, service: Any) -> Optional[str]:
+    if request.tags:
+        for key in ("scene_type", "category", "process"):
+            value = request.tags.get(key)
+            if value:
+                return str(value)
+    if request.device_id and getattr(service, "assets_by_id", None):
+        asset = service.assets_by_id.get(request.device_id)
+        if asset:
+            return str(asset.scene_type)
+    return None
 
-易损件清单：
-- 机械密封
-- 轴承
-- 叶轮
-- O型圈
-        """,
-        "category": "设备维护",
-        "tags": ["泵", "机械密封", "轴承", "保养"]
+
+def _dedupe_strings(values: List[str], *, limit: int = 5) -> List[str]:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+        if len(ordered) >= limit:
+            break
+    return ordered
+
+
+def _infer_spare_parts(references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    spare_parts: List[Dict[str, Any]] = []
+    keyword_map = {
+        "滤袋": {"name": "滤袋", "quantity": 4},
+        "电磁阀": {"name": "脉冲电磁阀", "quantity": 1},
+        "轴承": {"name": "轴承", "quantity": 2},
+        "密封": {"name": "机械密封", "quantity": 1},
+        "风机": {"name": "风机滤网", "quantity": 1},
     }
-}
+
+    for reference in references:
+        haystack = " ".join(
+            [
+                str(reference.get("title") or ""),
+                str(reference.get("summary") or ""),
+                str(reference.get("content") or ""),
+                " ".join(str(tag) for tag in (reference.get("tags") or [])),
+            ]
+        )
+        for keyword, part in keyword_map.items():
+            if keyword in haystack and part not in spare_parts:
+                spare_parts.append(part)
+    return spare_parts[:4]
 
 
 @router.post("/search", response_model=List[KnowledgeDoc])
 async def search_knowledge(
     request: SearchRequest,
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    搜索知识库
-    
-    使用关键词搜索相关知识文档
-    """
-    results = []
-    
-    # 简单的关键词匹配（实际应使用向量检索）
-    query_lower = request.query.lower()
-    query_keywords = set(query_lower.split())
-    
-    for doc_id, doc in _knowledge_base.items():
-        # 分类过滤
-        if request.category and doc["category"] != request.category:
-            continue
-        
-        # 计算相似度（简化版）
-        title_score = len(query_keywords & set(doc["title"].lower().split()))
-        content_score = len(query_keywords & set(doc["content"].lower().split()))
-        tag_score = sum(1 for tag in doc["tags"] if any(kw in tag.lower() for kw in query_keywords))
-        
-        total_score = (title_score * 3 + content_score + tag_score * 2) / 10
-        
-        if total_score > 0:
-            results.append(KnowledgeDoc(
-                id=doc["id"],
-                title=doc["title"],
-                content=doc["content"][:200] + "..." if len(doc["content"]) > 200 else doc["content"],
-                category=doc["category"],
-                tags=doc["tags"],
-                similarity_score=round(min(total_score, 1.0), 2)
-            ))
-    
-    # 按相似度排序
-    results.sort(key=lambda x: x.similarity_score or 0, reverse=True)
-    
-    return results[:request.limit]
+    service = get_intelligence_service()
+    hits = service.search_knowledge_cases(
+        request.query,
+        scene_type=request.category,
+        limit=request.limit,
+    )
+    service.record_knowledge_activity(
+        tenant_id=user.tenant_id,
+        event_type="search",
+        actor_id=user.user_id,
+        query=request.query,
+        scene_type=request.category,
+        metadata={"limit": request.limit, "result_count": len(hits)},
+    )
+    audit_logger.log_audit(
+        "search_knowledge",
+        user.user_id,
+        "knowledge",
+        "success",
+        tenant_id=user.tenant_id,
+        result_count=len(hits),
+    )
+    return [_case_to_doc(case) for case in hits]
 
 
 @router.get("/categories")
 async def get_categories(
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    获取知识分类
-    
-    返回所有知识文档分类
-    """
-    categories = set()
-    for doc in _knowledge_base.values():
-        categories.add(doc["category"])
-    
-    return list(categories)
+    service = get_intelligence_service()
+    categories = sorted(
+        {
+            str(case.get("scene_type") or "").strip()
+            for case in service.list_knowledge_cases(limit=500)
+            if str(case.get("scene_type") or "").strip()
+        }
+    )
+    audit_logger.log_audit(
+        "list_knowledge_categories",
+        user.user_id,
+        "knowledge/categories",
+        "success",
+        tenant_id=user.tenant_id,
+        category_count=len(categories),
+    )
+    return categories
 
 
 @router.get("/doc/{doc_id}", response_model=KnowledgeDoc)
 async def get_document(
     doc_id: str,
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    获取知识文档详情
-    
-    返回指定ID的知识文档完整内容
-    """
-    doc = _knowledge_base.get(doc_id)
-    
-    if not doc:
-        raise HTTPException(
-            status_code=404,
-            detail=f"文档 {doc_id} 不存在"
-        )
-    
-    return KnowledgeDoc(
-        id=doc["id"],
-        title=doc["title"],
-        content=doc["content"],
-        category=doc["category"],
-        tags=doc["tags"],
-        similarity_score=1.0
+    service = get_intelligence_service()
+    case = service.get_knowledge_case(doc_id)
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Knowledge document {doc_id} not found")
+
+    service.repository.increment_knowledge_case_usage(doc_id)
+    service.record_knowledge_activity(
+        tenant_id=user.tenant_id,
+        event_type="view",
+        actor_id=user.user_id,
+        resource_id=doc_id,
+        scene_type=str(case.get("scene_type") or ""),
     )
+    audit_logger.log_audit(
+        "read_knowledge_document",
+        user.user_id,
+        doc_id,
+        "success",
+        tenant_id=user.tenant_id,
+    )
+    return _case_to_doc(case, include_full_content=True)
 
 
 @router.post("/diagnose", response_model=DiagnoseResponse)
 async def diagnose(
     request: DiagnoseRequest,
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    智能诊断
-    
-    基于症状描述进行故障诊断
-    """
-    import uuid
-    
-    # 分析症状关键词
-    symptoms_lower = request.symptoms.lower()
-    
-    # 模拟诊断逻辑
-    diagnosis_map = {
-        "氧": {
-            "root_cause": "曝气盘部分堵塞，导致曝气效率下降",
-            "confidence": 0.85,
-            "suggestions": [
-                "检查并清洗曝气盘",
-                "检查风机运行状态",
-                "校准DO传感器"
-            ],
-            "spare_parts": [
-                {"name": "曝气盘", "quantity": 5},
-                {"name": "风机滤网", "quantity": 1}
-            ],
-            "references": ["DOC_001"]
-        },
-        "污泥": {
-            "root_cause": "进水营养物质比例失调，导致污泥膨胀",
-            "confidence": 0.78,
-            "suggestions": [
-                "检测进水BOD、N、P比例",
-                "调整营养物质投加量",
-                "适当加大排泥量",
-                "考虑投加絮凝剂"
-            ],
-            "spare_parts": [
-                {"name": "絮凝剂", "quantity": 50}
-            ],
-            "references": ["DOC_002"]
-        },
-        "泵": {
-            "root_cause": "泵机械密封磨损导致泄漏",
-            "confidence": 0.92,
-            "suggestions": [
-                "更换机械密封",
-                "检查轴承状态",
-                "检查联轴器对中"
-            ],
-            "spare_parts": [
-                {"name": "机械密封", "quantity": 1},
-                {"name": "轴承", "quantity": 2}
-            ],
-            "references": ["DOC_003"]
-        }
-    }
-    
-    # 匹配症状
-    matched_diagnosis = None
-    for keyword, diagnosis in diagnosis_map.items():
-        if keyword in symptoms_lower:
-            matched_diagnosis = diagnosis
-            break
-    
-    # 如果没有匹配到，使用默认诊断
-    if not matched_diagnosis:
-        matched_diagnosis = {
-            "root_cause": "根据症状无法确定具体原因，建议进一步检查相关设备",
-            "confidence": 0.5,
-            "suggestions": [
-                "检查设备运行日志",
-                "联系技术支持",
-                "进行现场巡检"
-            ],
-            "spare_parts": [],
-            "references": []
-        }
-    
-    # 获取参考文档
-    references = []
-    for ref_id in matched_diagnosis["references"]:
-        if ref_id in _knowledge_base:
-            doc = _knowledge_base[ref_id]
-            references.append(KnowledgeDoc(
-                id=doc["id"],
-                title=doc["title"],
-                content=doc["content"][:150] + "...",
-                category=doc["category"],
-                tags=doc["tags"],
-                similarity_score=0.9
-            ))
-    
-    return DiagnoseResponse(
-        diagnosis_id=f"DIAG_{uuid.uuid4().hex[:12].upper()}",
-        root_cause=matched_diagnosis["root_cause"],
-        confidence=matched_diagnosis["confidence"],
-        suggestions=matched_diagnosis["suggestions"],
-        spare_parts=matched_diagnosis["spare_parts"],
-        references=references
+    service = get_intelligence_service()
+    scene_type = _resolve_scene_type(request, service)
+    hits = service.search_knowledge_cases(
+        request.symptoms,
+        scene_type=scene_type,
+        limit=5,
     )
+    service.record_knowledge_activity(
+        tenant_id=user.tenant_id,
+        event_type="diagnose",
+        actor_id=user.user_id,
+        query=request.symptoms,
+        scene_type=scene_type,
+        resource_id=request.device_id,
+        metadata={"reference_count": len(hits)},
+    )
+
+    if hits:
+        top_hit = hits[0]
+        for reference in hits[:3]:
+            service.repository.increment_knowledge_case_usage(str(reference.get("case_id")))
+
+        suggestions = _dedupe_strings(
+            [
+                *(str(action) for hit in hits[:3] for action in (hit.get("recommended_actions") or [])),
+                "结合最近一次巡检与历史案例核对关键点位趋势。",
+                "如存在持续异常，请联动告警处置并安排现场复核。",
+            ],
+            limit=5,
+        )
+        response = DiagnoseResponse(
+            diagnosis_id=f"DIAG_{uuid.uuid4().hex[:12].upper()}",
+            root_cause=str(top_hit.get("root_cause") or top_hit.get("title") or "需要进一步排查"),
+            confidence=round(min(0.45 + (float(top_hit.get("score") or 0.0) / 25.0), 0.97), 2),
+            suggestions=suggestions,
+            spare_parts=_infer_spare_parts(hits[:3]),
+            references=[_case_to_doc(hit) for hit in hits[:4]],
+        )
+    else:
+        response = DiagnoseResponse(
+            diagnosis_id=f"DIAG_{uuid.uuid4().hex[:12].upper()}",
+            root_cause="现有知识案例中未找到足够匹配项，建议结合实时遥测与巡检结果进一步排查。",
+            confidence=0.4,
+            suggestions=[
+                "复核设备关键点位最近 30 分钟的趋势变化。",
+                "检查最新告警与巡检复核队列，确认是否存在相关案例。",
+                "必要时补充现场症状描述后再次检索知识库。",
+            ],
+            spare_parts=[],
+            references=[],
+        )
+
+    audit_logger.log_audit(
+        "knowledge_diagnose",
+        user.user_id,
+        response.diagnosis_id,
+        "success",
+        tenant_id=user.tenant_id,
+        reference_count=len(response.references),
+    )
+    return response
 
 
 @router.post("/feedback")
@@ -321,39 +280,54 @@ async def submit_feedback(
     diagnosis_id: str,
     helpful: bool,
     comment: Optional[str] = None,
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    提交诊断反馈
-    
-    对诊断结果进行反馈，用于改进诊断模型
-    """
-    # 实际应存储到数据库
+    service = get_intelligence_service()
+    feedback = service.record_knowledge_feedback(
+        diagnosis_id=diagnosis_id,
+        tenant_id=user.tenant_id,
+        helpful=helpful,
+        created_by=user.user_id,
+        comment=comment,
+    )
+    service.record_knowledge_activity(
+        tenant_id=user.tenant_id,
+        event_type="feedback",
+        actor_id=user.user_id,
+        resource_id=diagnosis_id,
+        metadata={"helpful": helpful},
+    )
+    audit_logger.log_audit(
+        "submit_knowledge_feedback",
+        user.user_id,
+        diagnosis_id,
+        "success",
+        tenant_id=user.tenant_id,
+        helpful=helpful,
+    )
     return {
         "success": True,
-        "message": "感谢您的反馈",
+        "message": "Thanks for the feedback.",
         "data": {
+            "feedback_id": feedback["feedback_id"],
             "diagnosis_id": diagnosis_id,
             "helpful": helpful,
-            "recorded_at": "2024-01-15T10:30:00Z"
-        }
+            "recorded_at": feedback["created_at"].isoformat(),
+        },
     }
 
 
 @router.get("/statistics")
 async def get_knowledge_statistics(
-    user: UserContext = Depends(require_permissions("data:read"))
+    user: UserContext = Depends(require_permissions("data:read")),
 ):
-    """
-    获取知识库统计
-    
-    返回知识库使用统计信息
-    """
-    return {
-        "total_documents": len(_knowledge_base),
-        "categories": len(set(d["category"] for d in _knowledge_base.values())),
-        "total_tags": len(set(tag for d in _knowledge_base.values() for tag in d["tags"])),
-        "search_count_today": 156,
-        "diagnosis_count_today": 23,
-        "accuracy_rate": 0.87
-    }
+    service = get_intelligence_service()
+    stats = service.get_knowledge_statistics(tenant_id=user.tenant_id)
+    audit_logger.log_audit(
+        "read_knowledge_statistics",
+        user.user_id,
+        "knowledge/statistics",
+        "success",
+        tenant_id=user.tenant_id,
+    )
+    return stats

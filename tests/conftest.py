@@ -8,14 +8,22 @@ import pytest
 import tempfile
 import shutil
 import json
+import uuid
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Generator
 import sqlite3
 
 # 添加项目根目录到路径
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+WORKSPACE_TMP_ROOT = Path(tempfile.gettempdir()) / "jamin_pytest"
+WORKSPACE_TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 @pytest.fixture(scope="session")
@@ -35,6 +43,15 @@ def temp_db_path(test_data_dir) -> Generator[str, None, None]:
     # 清理
     if db_path.exists():
         db_path.unlink()
+
+
+@pytest.fixture
+def tmp_path() -> Generator[Path, None, None]:
+    """Create a writable per-test temp directory inside the repo workspace."""
+    temp_dir = WORKSPACE_TMP_ROOT / f"pytest_{uuid.uuid4().hex[:8]}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    yield temp_dir
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @pytest.fixture(scope="function")
@@ -90,7 +107,7 @@ def sample_audit_record() -> Dict[str, Any]:
     """示例审计记录"""
     return {
         "id": "AUDIT_001",
-        "timestamp": datetime.utcnow(),
+        "timestamp": utc_now(),
         "action": "LOGIN",
         "user_id": "user_001",
         "user_name": "admin",
@@ -192,7 +209,7 @@ class TestDataGenerator:
             current += math.sin(i / 10) * 2
             
             data.append({
-                "timestamp": datetime.utcnow() + timedelta(seconds=i),
+                "timestamp": utc_now() + timedelta(seconds=i),
                 "value": current
             })
         

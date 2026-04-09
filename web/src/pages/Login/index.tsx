@@ -12,14 +12,31 @@ interface LoginFormValues {
 
 const Login: React.FC = () => {
   const [loading, setLoading] = useState(false)
-  const { login } = useAuthStore()
+  const { login, updateUser } = useAuthStore()
 
   const handleSubmit = async (values: LoginFormValues) => {
     setLoading(true)
 
     try {
       const response = await authApi.login(values)
-      login(response.token, response.user)
+      login(
+        response.token,
+        response.refreshToken,
+        response.user,
+        response.expiresIn,
+        response.refreshExpiresIn,
+      )
+
+      try {
+        const profile = await authApi.me()
+        updateUser({
+          ...profile,
+          role: profile.roles?.[0] ?? response.user.role,
+        })
+      } catch {
+        // Keep the session available even if profile hydration is temporarily unavailable.
+      }
+
       message.success(`欢迎回来，${response.user.username}`)
     } catch (error) {
       message.error(extractApiError(error, '登录失败，请稍后重试'))
@@ -35,7 +52,7 @@ const Login: React.FC = () => {
           <div className="login-header">
             <div className="login-logo">JIA</div>
             <h1 className="login-title">Jamin Industrial Agent</h1>
-            <p className="login-subtitle">工业智能监控与诊断系统</p>
+            <p className="login-subtitle">工业智能监控与诊断平台</p>
           </div>
 
           <Form name="login" onFinish={handleSubmit} autoComplete="off" size="large">
@@ -62,13 +79,13 @@ const Login: React.FC = () => {
 
           <div className="login-tips">
             <Typography.Paragraph style={{ marginBottom: 4 }}>
-              演示账号：admin / admin123
+              开发环境演示账号：admin / admin123
             </Typography.Paragraph>
             <Typography.Paragraph style={{ marginBottom: 4 }}>
-              操作员账号：operator / operator123
+              开发环境操作员：operator / operator123
             </Typography.Paragraph>
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              只读账号：viewer / viewer123
+              开发环境只读用户：viewer / viewer123
             </Typography.Paragraph>
           </div>
         </Card>

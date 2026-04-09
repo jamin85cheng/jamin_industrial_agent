@@ -24,9 +24,7 @@ data/*.db-shm
 data/*.db-wal
 data/vector_db/
 *.sqlite
-src/api/data/*.db
-src/api/data/*.db-shm
-src/api/data/*.db-wal
+src/api/data/
 
 # 日志
 logs/
@@ -37,7 +35,7 @@ models/saved/*.pkl
 models/saved/*.h5
 models/saved/*.pt
 
-# 配置文件 (敏感信息)
+# 配置文件（敏感信息）
 config/.env
 *.local.yaml
 

@@ -14,29 +14,67 @@ export interface User {
 interface AuthState {
   isAuthenticated: boolean
   token: string | null
+  refreshToken: string | null
+  tokenExpiresAt: number | null
+  refreshTokenExpiresAt: number | null
   user: User | null
-  login: (token: string, user: User) => void
+  login: (
+    token: string,
+    refreshToken: string | null,
+    user: User,
+    expiresInSeconds?: number,
+    refreshExpiresInSeconds?: number,
+  ) => void
+  updateTokens: (
+    token: string,
+    refreshToken: string | null,
+    expiresInSeconds?: number,
+    refreshExpiresInSeconds?: number,
+  ) => void
   logout: () => void
   updateUser: (user: Partial<User>) => void
 }
+
+const resolveExpiry = (seconds?: number) => (typeof seconds === 'number' ? Date.now() + seconds * 1000 : null)
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       isAuthenticated: false,
       token: null,
+      refreshToken: null,
+      tokenExpiresAt: null,
+      refreshTokenExpiresAt: null,
       user: null,
-      login: (token, user) => {
+      login: (token, refreshToken, user, expiresInSeconds, refreshExpiresInSeconds) => {
         set({
           isAuthenticated: true,
           token,
+          refreshToken,
+          tokenExpiresAt: resolveExpiry(expiresInSeconds),
+          refreshTokenExpiresAt: resolveExpiry(refreshExpiresInSeconds),
           user,
         })
+      },
+      updateTokens: (token, refreshToken, expiresInSeconds, refreshExpiresInSeconds) => {
+        set((state) => ({
+          isAuthenticated: true,
+          token,
+          refreshToken: refreshToken ?? state.refreshToken,
+          tokenExpiresAt: resolveExpiry(expiresInSeconds),
+          refreshTokenExpiresAt:
+            typeof refreshExpiresInSeconds === 'number'
+              ? resolveExpiry(refreshExpiresInSeconds)
+              : state.refreshTokenExpiresAt,
+        }))
       },
       logout: () => {
         set({
           isAuthenticated: false,
           token: null,
+          refreshToken: null,
+          tokenExpiresAt: null,
+          refreshTokenExpiresAt: null,
           user: null,
         })
       },
@@ -51,6 +89,9 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         token: state.token,
+        refreshToken: state.refreshToken,
+        tokenExpiresAt: state.tokenExpiresAt,
+        refreshTokenExpiresAt: state.refreshTokenExpiresAt,
         user: state.user,
       }),
     }

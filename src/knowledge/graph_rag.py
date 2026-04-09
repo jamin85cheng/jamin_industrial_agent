@@ -6,7 +6,7 @@ GraphRAG 知识图谱检索增强生成系统
 
 from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import re
 from collections import defaultdict
@@ -15,6 +15,10 @@ from src.utils.structured_logging import get_logger
 from src.utils.thread_safe import ThreadSafeDict
 
 logger = get_logger("graph_rag")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -27,7 +31,7 @@ class Entity:
     description: str = ""
     source: str = ""              # 数据来源
     confidence: float = 1.0       # 置信度
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
     
     def to_dict(self) -> Dict[str, Any]:
         return {

@@ -20,6 +20,10 @@ from src.utils.thread_safe import ThreadSafeDict
 logger = get_logger("multi_agent_diagnosis")
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class ExpertType(Enum):
     MECHANICAL = "mechanical"
     ELECTRICAL = "electrical"
@@ -45,7 +49,7 @@ class ExpertOpinion:
     fallback_reason: Optional[str] = None
     response_excerpt: Optional[str] = None
     duration_ms: Optional[float] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -84,7 +88,7 @@ class MultiAgentDiagnosisResult:
     fallback_summary: Dict[str, Any]
     coordinator_metadata: Dict[str, Any]
     debug_metadata: Dict[str, Any] = field(default_factory=dict)
-    generated_at: datetime = field(default_factory=datetime.utcnow)
+    generated_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self, include_debug: bool = False) -> Dict[str, Any]:
         payload = {

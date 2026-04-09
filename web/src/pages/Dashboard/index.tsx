@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, Col, Empty, List, Progress, Row, Space, Statistic, Table, Tag, Typography, message } from 'antd'
 import {
   ApiOutlined,
   BellOutlined,
-  CheckCircleOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
   DatabaseOutlined,
@@ -18,6 +17,7 @@ import {
   devicesApi,
   diagnosisV2Api,
   extractApiError,
+  reportsApi,
   type AlertRecord,
   type DeviceRecord,
   type DiagnosisResultV2,
@@ -58,6 +58,7 @@ const workflowColor = (status?: string) => {
 
 const workflowLabel = (status?: string) => {
   const labels: Record<string, string> = {
+    queued: '排队中',
     pending: '排队中',
     running: '运行中',
     completed: '已完成',
@@ -65,6 +66,7 @@ const workflowLabel = (status?: string) => {
     timeout: '超时',
     interrupted: '中断',
     recovered: '已恢复',
+    cancelled: '已取消',
   }
   return labels[status || ''] || status || '未知'
 }
@@ -78,8 +80,8 @@ const stageLabel = (value?: string) => {
     graph_rag_failed: 'GraphRAG 检索失败',
     expert_started: '专家分析开始',
     expert_completed: '专家分析完成',
-    coordinator_started: '协调者整合开始',
-    coordinator_completed: '协调者整合完成',
+    coordinator_started: '协调器整合开始',
+    coordinator_completed: '协调器整合完成',
     debate_started: 'CAMEL 协作开始',
     debate_round_started: '协作轮次开始',
     debate_round_completed: '协作轮次完成',
@@ -102,7 +104,7 @@ const buildUptime = (status: DeviceStatus) => {
 
 const isTaskActive = (task: DiagnosisTaskResponseV2) => {
   const workflowStatus = task.workflow?.status || task.status
-  return ['pending', 'running', 'recovered'].includes(workflowStatus)
+  return ['queued', 'pending', 'running', 'recovered'].includes(workflowStatus)
 }
 
 const mergeTaskSnapshot = (tasks: DiagnosisTaskResponseV2[], nextTask: DiagnosisTaskResponseV2) => {
@@ -119,12 +121,6 @@ const mergeTaskSnapshot = (tasks: DiagnosisTaskResponseV2[], nextTask: Diagnosis
 const DeviceCard: React.FC<{ device: DashboardDevice }> = ({ device }) => (
   <Card className="device-card" size="small">
     <div className="device-card-content">
-      <CheckCircleOutlined
-        style={{
-          color: device.status === 'online' ? '#44b546' : device.status === 'warning' ? '#db8b2e' : '#c33b2d',
-          fontSize: 22,
-        }}
-      />
       <div className="device-info">
         <div className="device-name">{device.name}</div>
         <div className="device-tags">
@@ -143,13 +139,15 @@ const AlertTable: React.FC<{
   loading: boolean
   diagnosing?: boolean
   onDiagnose?: (alertId: string) => void
-}> = ({ alerts, loading, diagnosing = false, onDiagnose }) => {
+  onOpenTask?: (taskId: string) => void
+  onDownloadReport?: (reportId: string) => void
+}> = ({ alerts, loading, diagnosing = false, onDiagnose, onOpenTask, onDownloadReport }) => {
   const columns: TableProps<AlertRecord>['columns'] = [
     {
       title: '级别',
       dataIndex: 'severity',
       key: 'severity',
-      width: 110,
+      width: 96,
       render: (severity: AlertRecord['severity']) => <Tag color={severityMeta[severity].color}>{severityMeta[severity].label}</Tag>,
     },
     { title: '规则', dataIndex: 'rule_name', key: 'rule_name', render: (value: string | null | undefined) => value || '-' },
@@ -158,17 +156,41 @@ const AlertTable: React.FC<{
     {
       title: '操作',
       key: 'action',
-      width: 120,
-      render: (_, record) =>
-        onDiagnose ? (
-          <Button size="small" loading={diagnosing} onClick={() => onDiagnose(record.id)}>
-            发起诊断
-          </Button>
-        ) : null,
+      width: 280,
+      render: (_, record) => (
+        <Space wrap>
+          {onDiagnose ? (
+            <Button size="small" loading={diagnosing} onClick={() => onDiagnose(record.id)}>
+              发起诊断
+            </Button>
+          ) : null}
+          {record.diagnosis_task_id && onOpenTask ? (
+            <Button size="small" type="link" onClick={() => onOpenTask(record.diagnosis_task_id!)}>
+              查看任务
+            </Button>
+          ) : null}
+          {record.latest_report_id && onDownloadReport ? (
+            <Button size="small" type="link" onClick={() => onDownloadReport(record.latest_report_id!)}>
+              下载报告
+            </Button>
+          ) : null}
+        </Space>
+      ),
     },
   ]
 
-  return <Table columns={columns} dataSource={alerts} rowKey="id" loading={loading} locale={{ emptyText: <Empty description="暂无告警" /> }} size="small" pagination={false} scroll={{ y: 220 }} />
+  return (
+    <Table
+      columns={columns}
+      dataSource={alerts}
+      rowKey="id"
+      loading={loading}
+      locale={{ emptyText: <Empty description="暂无告警" /> }}
+      size="small"
+      pagination={false}
+      scroll={{ y: 220 }}
+    />
+  )
 }
 
 const Dashboard: React.FC = () => {
@@ -190,6 +212,7 @@ const Dashboard: React.FC = () => {
     queryFn: diagnosisV2Api.getRuntimeDebug,
     refetchInterval: 30000,
   })
+
   const diagnoseAlertMutation = useMutation({
     mutationFn: (alertId: string) =>
       diagnosisV2Api.analyzeAlert(alertId, {
@@ -247,6 +270,15 @@ const Dashboard: React.FC = () => {
     }
   }, [activeTaskIds, tasksQuery, runtimeDebugQuery])
 
+  const handleDownloadReport = async (reportId: string) => {
+    try {
+      await reportsApi.download(reportId)
+      message.success('报告下载已开始')
+    } catch (error) {
+      message.error(extractApiError(error, '下载报告失败'))
+    }
+  }
+
   const deviceItems: DashboardDevice[] = (devicesQuery.data?.devices ?? []).map((device) => {
     const status = normalizeDeviceStatus(device.status)
     return { id: device.id, name: device.name, status, tagCount: device.tag_count, uptime: buildUptime(status) }
@@ -257,16 +289,21 @@ const Dashboard: React.FC = () => {
   const runtimeCards = [...(expertsQuery.data?.experts ?? []), ...(expertsQuery.data?.coordinator ? [expertsQuery.data.coordinator] : [])]
   const llmEnabledCount = runtimeCards.filter((item) => Boolean(item.runtime?.llm_enabled)).length
   const runtimeInactive = runtimeCards.length > 0 && llmEnabledCount === 0
-  const coordinatorModel = String(expertsQuery.data?.coordinator?.runtime?.model_name || '未绑定')
   const taskFeed = liveTasks.length ? liveTasks : tasksQuery.data?.tasks ?? []
-  const taskStorage = runtimeDebugQuery.data?.runtime.task_tracker?.storage || taskFeed[0]?.runtime?.storage || 'unknown'
-  const taskStorageTarget = runtimeDebugQuery.data?.runtime.task_tracker?.persistence_path || taskFeed[0]?.runtime?.target || '-'
-  const metadataStorage = runtimeDebugQuery.data?.runtime.metadata_database?.backend || 'unknown'
-  const metadataStorageTarget = runtimeDebugQuery.data?.runtime.metadata_database?.target || '-'
+  const diagnosisExecutor = runtimeDebugQuery.data?.runtime.diagnosis_executor
+  const diagnosisBootstrap = runtimeDebugQuery.data?.runtime.diagnosis_runtime_bootstrap
+  const diagnosisExecutionBackend =
+    diagnosisExecutor?.backend || runtimeDebugQuery.data?.config.diagnosis_execution_backend || 'background_tasks'
+  const diagnosisQueueDepth = diagnosisExecutor?.queue_depth ?? runtimeDebugQuery.data?.runtime.task_tracker?.total_queued ?? 0
+  const diagnosisWorkerCount =
+    diagnosisExecutor?.worker_count ??
+    diagnosisExecutor?.max_workers ??
+    runtimeDebugQuery.data?.config.diagnosis_execution_asyncio_workers ??
+    0
 
   const taskSummary = useMemo(() => {
     return {
-      running: taskFeed.filter((task) => ['pending', 'running'].includes(task.workflow?.status || task.status)).length,
+      running: taskFeed.filter((task) => ['queued', 'pending', 'running'].includes(task.workflow?.status || task.status)).length,
       recovered: taskFeed.filter((task) => task.workflow?.status === 'recovered').length,
       interrupted: taskFeed.filter((task) => task.workflow?.status === 'interrupted').length,
       completed: taskFeed.filter((task) => (task.workflow?.status || task.status) === 'completed').length,
@@ -282,27 +319,27 @@ const Dashboard: React.FC = () => {
 
       <section className="dashboard-hero">
         <div className="dashboard-hero-copy">
-          <Tag color="cyan">商用诊断驾驶舱</Tag>
+          <Tag color="cyan">企业级诊断工作台</Tag>
           <Title level={2}>工业诊断运营总览</Title>
           <Paragraph>
-            首页会直接展示长任务多智能体诊断的实时运行状态，同时把任务存储和元数据数据库的真实后端一起展示出来，方便运维确认系统是否已经切到 Postgres。
+            这里把告警、诊断任务、报告交付和运行时状态放到同一张首页里，便于运维和值班同学快速判断链路是否已经跑通。
           </Paragraph>
           <Space wrap>
-            <Button type="primary" icon={<ThunderboltOutlined />}>
-              <Link to="/diagnosis">进入诊断控制台</Link>
+            <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => navigate('/diagnosis')}>
+              进入诊断控制台
             </Button>
-            <Button icon={<RobotOutlined />}>
-              <Link to="/diagnosis">运行真实模型探测</Link>
+            <Button icon={<RobotOutlined />} onClick={() => void runtimeDebugQuery.refetch()}>
+              刷新运行态
             </Button>
           </Space>
         </div>
         <div className="dashboard-signal-board">
           <div className="signal-pill"><span>智能体在线</span><strong>{runtimeCards.length}</strong></div>
           <div className="signal-pill"><span>LLM 路由</span><strong>{llmEnabledCount}</strong></div>
-          <div className="signal-pill"><span>协调者模型</span><strong>{coordinatorModel}</strong></div>
           <div className="signal-pill"><span>运行中任务</span><strong>{taskSummary.running}</strong></div>
-          <div className="signal-pill"><span>任务存储</span><strong>{String(taskStorage)}</strong></div>
-          <div className="signal-pill"><span>元数据存储</span><strong>{String(metadataStorage)}</strong></div>
+          <div className="signal-pill"><span>Queue depth</span><strong>{diagnosisQueueDepth}</strong></div>
+          <div className="signal-pill"><span>Workers</span><strong>{diagnosisWorkerCount}</strong></div>
+          <div className="signal-pill"><span>Executor</span><strong>{String(diagnosisExecutionBackend)}</strong></div>
         </div>
       </section>
 
@@ -312,7 +349,7 @@ const Dashboard: React.FC = () => {
           showIcon
           style={{ marginBottom: 16 }}
           message="当前后端进程尚未激活多模型路由"
-          description="首页展示的是 /v2/diagnosis/experts 返回的真实运行态。如果你预期这里已经绑定模型，请检查页面当前连接的是哪一个后端实例。"
+          description="这通常意味着当前连接的实例还没有加载生产模型配置，可以去诊断控制台进一步核查。"
         />
       ) : null}
 
@@ -325,80 +362,53 @@ const Dashboard: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} xl={10}>
-          <Card title="诊断指挥中心" className="dashboard-card command-card" loading={expertsQuery.isLoading || historyQuery.isLoading}>
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <div className="command-grid">
-                {runtimeCards.map((item) => (
-                  <div className="runtime-chip" key={item.id}>
-                    <div>
-                      <Text strong>{item.name}</Text>
-                      <div><Text type="secondary">{item.type}</Text></div>
-                    </div>
-                    <Space size={[6, 6]} wrap>
-                      <Tag color="blue">{String(item.runtime?.model_name || '未绑定')}</Tag>
-                      <Tag color={item.runtime?.llm_enabled ? 'success' : 'default'}>{item.runtime?.llm_enabled ? '模型已启用' : '模型未启用'}</Tag>
-                    </Space>
-                  </div>
-                ))}
-              </div>
-
-              {recentDiagnosis ? (
-                <div className="briefing-panel">
-                  <div className="briefing-header">
-                    <Text strong>最近一次诊断结论</Text>
-                    <Tag color="geekblue">{new Date(recentDiagnosis.generated_at).toLocaleString()}</Tag>
-                  </div>
-                  <Paragraph className="briefing-text">{recentDiagnosis.final_conclusion}</Paragraph>
-                  <Space wrap>
-                    <Tag color="purple">置信度 {Math.round(recentDiagnosis.confidence * 100)}%</Tag>
-                    <Tag color="gold">共识度 {Math.round(recentDiagnosis.consensus_level * 100)}%</Tag>
-                    {recentDiagnosis.related_cases.slice(0, 2).map((item) => <Tag key={item}>{item}</Tag>)}
-                  </Space>
-                </div>
-              ) : (
-                <Empty description="暂无诊断历史" />
-              )}
-            </Space>
+          <Card title="最近诊断摘要" className="dashboard-card" loading={historyQuery.isLoading}>
+            {recentDiagnosis ? (
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <Space wrap>
+                  <Tag color="geekblue">{new Date(recentDiagnosis.generated_at).toLocaleString()}</Tag>
+                  <Tag color="purple">置信度 {Math.round(recentDiagnosis.confidence * 100)}%</Tag>
+                  <Tag color="gold">共识度 {Math.round(recentDiagnosis.consensus_level * 100)}%</Tag>
+                </Space>
+                <Paragraph style={{ marginBottom: 0 }}>{recentDiagnosis.final_conclusion}</Paragraph>
+                <Space wrap>
+                  {(recentDiagnosis.related_cases ?? []).slice(0, 3).map((item) => <Tag key={item}>{item}</Tag>)}
+                </Space>
+              </Space>
+            ) : (
+              <Empty description="暂无诊断历史" />
+            )}
           </Card>
         </Col>
 
         <Col xs={24} xl={14}>
-          <Card title="数据库运行态" className="dashboard-card" loading={runtimeDebugQuery.isLoading}>
-            <div className="task-panel-header">
-              <div className="task-summary-grid">
-                <div className="task-summary-card"><span>任务存储</span><strong>{String(taskStorage)}</strong></div>
-                <div className="task-summary-card"><span>元数据存储</span><strong>{String(metadataStorage)}</strong></div>
-                <div className="task-summary-card"><span>任务活跃数</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.active_tasks ?? taskSummary.running}</strong></div>
-                <div className="task-summary-card"><span>任务运行数</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.running_tasks ?? 0}</strong></div>
-                <div className="task-summary-card"><span>路由状态</span><strong>{runtimeDebugQuery.data?.runtime.router_enabled ? '已启用' : '未启用'}</strong></div>
-              </div>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Text type="secondary">任务存储目标：{taskStorageTarget}</Text>
-                <Text type="secondary">元数据目标：{metadataStorageTarget}</Text>
-              </Space>
+          <Card title="诊断运行态" className="dashboard-card" loading={runtimeDebugQuery.isLoading}>
+            <div className="task-summary-grid">
+              <div className="task-summary-card"><span>任务存储</span><strong>{String(runtimeDebugQuery.data?.runtime.task_tracker?.storage || 'unknown')}</strong></div>
+              <div className="task-summary-card"><span>元数据存储</span><strong>{String(runtimeDebugQuery.data?.runtime.metadata_database?.backend || 'unknown')}</strong></div>
+              <div className="task-summary-card"><span>活动任务</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.active_tasks ?? taskSummary.running}</strong></div>
+              <div className="task-summary-card"><span>运行任务</span><strong>{runtimeDebugQuery.data?.runtime.task_tracker?.running_tasks ?? 0}</strong></div>
+              <div className="task-summary-card"><span>排队任务</span><strong>{diagnosisQueueDepth}</strong></div>
+              <div className="task-summary-card"><span>自动恢复</span><strong>{diagnosisBootstrap?.auto_resume_enabled ? 'On' : 'Off'}</strong></div>
             </div>
+            <Space direction="vertical" size={4} style={{ marginTop: 16, width: '100%' }}>
+              <Text type="secondary">任务目标：{runtimeDebugQuery.data?.runtime.task_tracker?.persistence_path || '-'}</Text>
+              <Text type="secondary">元数据目标：{runtimeDebugQuery.data?.runtime.metadata_database?.target || '-'}</Text>
+              <Text type="secondary">启动恢复数量：{diagnosisBootstrap?.auto_resumed_task_ids?.length ?? 0}</Text>
+              <Text type="secondary">启动时间：{diagnosisBootstrap?.bootstrapped_at ? new Date(diagnosisBootstrap.bootstrapped_at).toLocaleString() : '-'}</Text>
+              <Space wrap>
+                <Tag color={diagnosisExecutor?.durable ? 'success' : 'default'}>{diagnosisExecutor?.durable ? 'Durable execution' : 'Non-durable execution'}</Tag>
+                <Tag color={diagnosisExecutor?.requires_worker ? 'processing' : 'default'}>{diagnosisExecutor?.requires_worker ? 'Worker required' : 'In-process'}</Tag>
+                {diagnosisExecutor?.resolution_note ? <Tag>{String(diagnosisExecutor.resolution_note)}</Tag> : null}
+              </Space>
+            </Space>
           </Card>
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} xl={14}>
-          <Card title="持久化诊断任务概览" className="dashboard-card" loading={tasksQuery.isLoading}>
-            <div className="task-panel-header">
-              <div className="task-summary-grid">
-                <div className="task-summary-card"><span>运行中</span><strong>{taskSummary.running}</strong></div>
-                <div className="task-summary-card"><span>已恢复</span><strong>{taskSummary.recovered}</strong></div>
-                <div className="task-summary-card"><span>中断</span><strong>{taskSummary.interrupted}</strong></div>
-                <div className="task-summary-card"><span>已完成</span><strong>{taskSummary.completed}</strong></div>
-                <div className="task-summary-card"><span>失败</span><strong>{taskSummary.failed}</strong></div>
-              </div>
-              <Space size={8} wrap>
-                <Tag color={activeTaskIds.length ? 'processing' : 'default'}>
-                  {activeTaskIds.length ? `已连接 ${activeTaskIds.length} 条实时任务流` : '当前无实时任务流'}
-                </Tag>
-              </Space>
-            </div>
-
+          <Card title="持久化诊断任务" className="dashboard-card" loading={tasksQuery.isLoading}>
             {taskFeed.length > 0 ? (
               <List
                 className="task-list"
@@ -409,8 +419,8 @@ const Dashboard: React.FC = () => {
                   return (
                     <List.Item
                       actions={[
-                        <Button key={task.task_id} type="link" size="small">
-                          <Link to={`/diagnosis?taskId=${encodeURIComponent(task.task_id)}`}>接管任务</Link>
+                        <Button key={task.task_id} type="link" size="small" onClick={() => navigate(`/diagnosis?taskId=${encodeURIComponent(task.task_id)}`)}>
+                          接管任务
                         </Button>,
                       ]}
                     >
@@ -419,11 +429,8 @@ const Dashboard: React.FC = () => {
                           <Space wrap>
                             <Tag color={workflowColor(task.workflow?.status || task.status)}>{workflowLabel(task.workflow?.status || task.status)}</Tag>
                             <Tag>{task.metadata?.diagnosis_mode || task.task_type}</Tag>
-                            <Tag color={task.runtime?.storage === 'postgres' ? 'geekblue' : 'default'}>{task.runtime?.storage || 'sqlite'}</Tag>
                             <Tag icon={<ClockCircleOutlined />}>{task.runtime?.timeout_seconds ?? '-'} 秒预算</Tag>
-                            {isTaskActive(task) ? <Tag color="processing">实时更新</Tag> : null}
                             {task.recovery?.restored_from_persistence ? <Tag color="gold">已恢复</Tag> : null}
-                            {task.recovery?.interrupted_by_restart ? <Tag color="red">重启中断</Tag> : null}
                           </Space>
                           <div><Text strong>{currentStage}</Text></div>
                           <div>
@@ -461,6 +468,8 @@ const Dashboard: React.FC = () => {
               loading={alertsQuery.isLoading}
               diagnosing={diagnoseAlertMutation.isPending}
               onDiagnose={(alertId) => diagnoseAlertMutation.mutate(alertId)}
+              onOpenTask={(taskId) => navigate(`/diagnosis?taskId=${encodeURIComponent(taskId)}`)}
+              onDownloadReport={(reportId) => void handleDownloadReport(reportId)}
             />
           </Card>
         </Col>

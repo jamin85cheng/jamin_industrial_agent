@@ -53,6 +53,7 @@ database:
     host: "${POSTGRES_HOST:127.0.0.1}"
     port: ${POSTGRES_PORT:5432}
     database: "${POSTGRES_DB:jamin_industrial_agent}"
+    maintenance_database: "${POSTGRES_MAINTENANCE_DB:postgres}"
     user: "${POSTGRES_USER:postgres}"
     password: "${POSTGRES_PASSWORD:postgres}"
     schema: "${POSTGRES_SCHEMA:jamin_industrial_agent}"
@@ -69,6 +70,13 @@ database:
     database: "jamin_industrial"
     user: "root"
     password: "${MYSQL_PASSWORD}"  # 从环境变量读取
+
+# ==================== 诊断执行配置 ====================
+diagnosis:
+  execution:
+    backend: "${DIAGNOSIS_EXECUTION_BACKEND:background_tasks}"   # background_tasks / asyncio_queue / celery
+    asyncio_workers: ${DIAGNOSIS_EXECUTION_ASYNCIO_WORKERS:2}
+    auto_resume_recovered: ${DIAGNOSIS_EXECUTION_AUTO_RESUME_RECOVERED:false}
 
 # ==================== 点位映射配置 ====================
 tag_mapping:
@@ -266,7 +274,7 @@ logging:
 api:
   enabled: true
   host: "0.0.0.0"
-  port: 8000
+  port: 8600
   
   # CORS 配置
   cors:
@@ -318,6 +326,22 @@ self_evolution:
 
 # ==================== 安全配置 ====================
 security:
+  jwt_secret: "${JWT_SECRET:}"
+
+  demo_users:
+    enabled: true
+    allow_in_production: false
+
+  api_keys:
+    enabled: false
+    keys:
+      - key: "${DEMO_API_KEY:}"
+        user_id: "api_user_001"
+        username: "api_user"
+        roles: ["operator"]
+        tenant_id: "default"
+        permissions: ["data:read", "device:read"]
+
   # 控制指令安全限制
   control_limits:
     enabled: true

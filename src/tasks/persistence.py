@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.utils.runtime_migrations import apply_runtime_schema_migrations
 from src.utils.structured_logging import get_logger
 
 logger = get_logger("task_persistence")
@@ -141,6 +142,21 @@ class PostgresTaskPersistenceBackend(TaskPersistenceBackend):
             raise RuntimeError("Postgres driver is not installed. Install psycopg[binary] or psycopg2-binary.")
 
     @property
+    def migration_config(self) -> Dict[str, Any]:
+        return {
+            "postgres": {
+                "enabled": True,
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
+                "user": self.user,
+                "password": self.password,
+                "schema": self.schema,
+                "sslmode": self.sslmode,
+            }
+        }
+
+    @property
     def target(self) -> str:
         return f"postgresql://{self.user}@{self.host}:{self.port}/{self.database}#{self.schema}"
 
@@ -174,21 +190,7 @@ class PostgresTaskPersistenceBackend(TaskPersistenceBackend):
         return conn.cursor(cursor_factory=dict_cursor)
 
     def init(self) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS "{self.schema}".tracked_tasks (
-                        task_id TEXT PRIMARY KEY,
-                        status TEXT NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL,
-                        updated_at TIMESTAMPTZ NOT NULL,
-                        payload_json JSONB NOT NULL
-                    )
-                    """
-                )
-            conn.commit()
+        apply_runtime_schema_migrations(self.migration_config)
 
     def load_payloads(self) -> List[Dict[str, Any]]:
         with self._connect() as conn:

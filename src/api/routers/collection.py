@@ -1,18 +1,20 @@
-"""数据采集 API。"""
+"""Collection APIs backed by persistent telemetry storage."""
 
 from __future__ import annotations
 
-import math
-import random
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import TenantContext, UserContext, get_tenant_context, require_permissions
+from src.api.repositories.device_repository import DeviceRepository
+from src.api.repositories.telemetry_repository import TelemetryRepository
 
-router = APIRouter(prefix="/collection", tags=["数据采集"])
+router = APIRouter(prefix="/collection", tags=["collection"])
+telemetry_repository = TelemetryRepository()
+device_repository = DeviceRepository()
 
 
 def utc_now() -> datetime:
@@ -20,26 +22,39 @@ def utc_now() -> datetime:
 
 
 class DataPoint(BaseModel):
-    """采集点数据。"""
-
     timestamp: datetime
     value: float
     quality: str = "good"
+    device_id: Optional[str] = None
+    unit: Optional[str] = None
+    source: Optional[str] = None
+
+
+class TelemetryIngestPoint(BaseModel):
+    device_id: str
+    tag: str
+    value: float
+    timestamp: Optional[datetime] = None
+    quality: str = "good"
+    unit: Optional[str] = None
+    source: Optional[str] = None
+
+
+class TelemetryIngestRequest(BaseModel):
+    points: List[TelemetryIngestPoint] = Field(..., min_length=1)
 
 
 class DataQueryRequest(BaseModel):
-    """历史数据查询请求。"""
-
     tags: List[str] = Field(..., min_length=1)
     start_time: datetime
     end_time: datetime
+    device_ids: Optional[List[str]] = None
     aggregation: Optional[str] = Field("raw", pattern=r"^(raw|mean|sum|min|max)$")
     interval: Optional[str] = None
+    limit_per_tag: int = Field(default=5000, ge=1, le=20000)
 
 
 class DataQueryResponse(BaseModel):
-    """历史数据查询响应。"""
-
     tags: List[str]
     start_time: datetime
     end_time: datetime
@@ -47,129 +62,48 @@ class DataQueryResponse(BaseModel):
 
 
 class CollectionStartRequest(BaseModel):
-    """启动采集请求。"""
-
     device_ids: Optional[List[str]] = None
     scan_interval: int = Field(default=10, ge=1, le=3600)
 
 
 class CollectionStatusResponse(BaseModel):
-    """采集状态响应。"""
-
     is_running: bool
     device_count: int
+    device_ids: List[str] = Field(default_factory=list)
+    scan_interval: int = 10
     last_data_time: Optional[datetime]
     throughput: float
+    started_at: Optional[datetime] = None
+    started_by: Optional[str] = None
+    stopped_at: Optional[datetime] = None
 
 
-_collection_status = {
-    "is_running": False,
-    "devices": {},
-    "last_data_time": None,
-    "start_time": None,
-}
-
-_data_store: Dict[str, List[Dict]] = {}
-
-
-@router.post("/start")
-async def start_collection(
-    request: CollectionStartRequest,
-    user: UserContext = Depends(require_permissions("device:write")),
-    tenant: TenantContext = Depends(get_tenant_context),
-):
-    """启动数据采集。"""
-    started_at = utc_now()
-    _collection_status["is_running"] = True
-    _collection_status["start_time"] = started_at
-    _collection_status["devices"] = {device_id: {"tenant_id": tenant.tenant_id} for device_id in (request.device_ids or [])}
-
-    return {
-        "success": True,
-        "message": "数据采集已启动",
-        "data": {
-            "is_running": True,
-            "scan_interval": request.scan_interval,
-            "started_at": started_at.isoformat(),
-            "tenant_id": tenant.tenant_id,
-        },
-    }
-
-
-@router.post("/stop")
-async def stop_collection(
-    device_id: Optional[str] = Query(None),
-    user: UserContext = Depends(require_permissions("device:write")),
-):
-    """停止数据采集。"""
-    _collection_status["is_running"] = False
-    if device_id:
-        _collection_status.get("devices", {}).pop(device_id, None)
-        message = f"设备 {device_id} 的数据采集已停止"
-    else:
-        _collection_status["devices"] = {}
-        message = "数据采集已停止"
-
-    return {
-        "success": True,
-        "message": message,
-        "data": {"is_running": False},
-    }
-
-
-@router.get("/status", response_model=CollectionStatusResponse)
-async def get_collection_status(
-    user: UserContext = Depends(require_permissions("device:read")),
-):
-    """获取采集状态。"""
-    throughput = 150.5 if _collection_status["is_running"] else 0.0
-    return CollectionStatusResponse(
-        is_running=_collection_status["is_running"],
-        device_count=len(_collection_status.get("devices", {})),
-        last_data_time=_collection_status.get("last_data_time"),
-        throughput=throughput,
-    )
-
-
-@router.post("/data/query", response_model=DataQueryResponse)
-async def query_data(
-    request: DataQueryRequest,
-    user: UserContext = Depends(require_permissions("data:read")),
-    tenant: TenantContext = Depends(get_tenant_context),
-):
-    """查询历史数据。"""
-    result_data: Dict[str, List[DataPoint]] = {}
-
-    for tag in request.tags:
-        points: List[DataPoint] = []
-        current_time = request.start_time
-        while current_time <= request.end_time:
-            base_value = 25.0
-            variation = 10.0 * math.sin(current_time.timestamp() / 3600)
-            noise = (hash(current_time.isoformat()) % 100) / 100.0 * 2 - 1
-            points.append(
-                DataPoint(
-                    timestamp=current_time,
-                    value=base_value + variation + noise,
-                    quality="good",
-                )
+def _resolve_collection_devices(*, tenant_id: str, requested_device_ids: Optional[Sequence[str]]) -> List[str]:
+    if requested_device_ids:
+        devices = device_repository.list_runtime_devices(
+            tenant_id=tenant_id,
+            device_ids=list(dict.fromkeys(requested_device_ids)),
+            enabled_only=False,
+        )
+        found_ids = {device["id"] for device in devices}
+        missing = [device_id for device_id in requested_device_ids if device_id not in found_ids]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Devices not found in tenant scope: {', '.join(missing)}",
             )
-            current_time += timedelta(minutes=1)
+        return [device["id"] for device in devices]
 
-        if request.aggregation != "raw" and request.interval:
-            points = _aggregate_points(points, request.aggregation, request.interval)
-        result_data[tag] = points
-
-    return DataQueryResponse(
-        tags=request.tags,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        data=result_data,
-    )
+    enabled_devices = device_repository.list_runtime_devices(tenant_id=tenant_id, enabled_only=True)
+    if not enabled_devices:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No enabled devices available for collection",
+        )
+    return [device["id"] for device in enabled_devices]
 
 
 def _aggregate_points(points: List[DataPoint], aggregation: str, interval: str) -> List[DataPoint]:
-    """按时间窗口聚合数据点。"""
     grouped: Dict[datetime, List[DataPoint]] = {}
 
     if interval.endswith("m"):
@@ -196,58 +130,298 @@ def _aggregate_points(points: List[DataPoint], aggregation: str, interval: str) 
             value = max(values)
         else:
             value = sum(values) / len(values)
-        aggregated.append(DataPoint(timestamp=bucket, value=round(value, 2), quality="good"))
+        sample = group_points[-1]
+        aggregated.append(
+            DataPoint(
+                timestamp=bucket,
+                value=round(value, 4),
+                quality=sample.quality,
+                device_id=sample.device_id if len({item.device_id for item in group_points}) == 1 else None,
+                unit=sample.unit,
+                source=sample.source,
+            )
+        )
     return aggregated
+
+
+def _validate_ingest_points(*, tenant_id: str, points: Sequence[TelemetryIngestPoint]) -> None:
+    unique_device_ids = list(dict.fromkeys(point.device_id for point in points))
+    devices = device_repository.list_runtime_devices(
+        tenant_id=tenant_id,
+        device_ids=unique_device_ids,
+        enabled_only=False,
+    )
+    found_devices = {device["id"]: device for device in devices}
+    missing_devices = [device_id for device_id in unique_device_ids if device_id not in found_devices]
+    if missing_devices:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Devices not found in tenant scope: {', '.join(missing_devices)}",
+        )
+
+    tag_catalog = {
+        device_id: {tag["name"] for tag in device_repository.list_tags(device_id, tenant_id=tenant_id)}
+        for device_id in unique_device_ids
+    }
+    invalid_pairs = [
+        f"{point.device_id}:{point.tag}"
+        for point in points
+        if point.tag not in tag_catalog.get(point.device_id, set())
+    ]
+    if invalid_pairs:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown device tags: {', '.join(invalid_pairs)}",
+        )
+
+
+def _default_tags_for_tenant(tenant_id: str) -> List[str]:
+    runtime_devices = device_repository.list_runtime_devices(tenant_id=tenant_id, enabled_only=False)
+    discovered: List[str] = []
+    for device in runtime_devices:
+        for tag in device_repository.list_tags(device["id"], tenant_id=tenant_id):
+            name = str(tag["name"])
+            if name not in discovered:
+                discovered.append(name)
+    return discovered[:20]
+
+
+@router.post("/start")
+async def start_collection(
+    request: CollectionStartRequest,
+    user: UserContext = Depends(require_permissions("device:write")),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    device_ids = _resolve_collection_devices(
+        tenant_id=tenant.tenant_id,
+        requested_device_ids=request.device_ids,
+    )
+    started_at = utc_now()
+    state = telemetry_repository.save_collection_state(
+        tenant_id=tenant.tenant_id,
+        is_running=True,
+        device_ids=device_ids,
+        scan_interval=request.scan_interval,
+        started_by=user.user_id,
+        started_at=started_at,
+        stopped_at=None,
+    )
+
+    return {
+        "success": True,
+        "message": "Collection runtime started",
+        "data": {
+            **state,
+            "tenant_id": tenant.tenant_id,
+        },
+    }
+
+
+@router.post("/stop")
+async def stop_collection(
+    device_id: Optional[str] = Query(None),
+    user: UserContext = Depends(require_permissions("device:write")),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    current_state = telemetry_repository.get_collection_state(tenant_id=tenant.tenant_id)
+    device_ids = list(current_state.get("device_ids", []))
+
+    if device_id:
+        if device_id not in device_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Device {device_id} is not part of the active collection scope",
+            )
+        device_ids = [item for item in device_ids if item != device_id]
+        is_running = len(device_ids) > 0
+        message = f"Stopped collection for device {device_id}"
+    else:
+        device_ids = []
+        is_running = False
+        message = "Collection runtime stopped"
+
+    state = telemetry_repository.save_collection_state(
+        tenant_id=tenant.tenant_id,
+        is_running=is_running,
+        device_ids=device_ids,
+        scan_interval=int(current_state.get("scan_interval") or 10),
+        started_by=current_state.get("started_by"),
+        started_at=current_state.get("started_at"),
+        stopped_at=utc_now(),
+    )
+
+    return {
+        "success": True,
+        "message": message,
+        "data": {
+            **state,
+            "stopped_by": user.user_id,
+        },
+    }
+
+
+@router.get("/status", response_model=CollectionStatusResponse)
+async def get_collection_status(
+    user: UserContext = Depends(require_permissions("device:read")),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    state = telemetry_repository.get_collection_state(tenant_id=tenant.tenant_id)
+    summary = telemetry_repository.telemetry_summary(tenant_id=tenant.tenant_id)
+    return CollectionStatusResponse(
+        is_running=bool(state.get("is_running", False)),
+        device_count=len(state.get("device_ids", [])),
+        device_ids=list(state.get("device_ids", [])),
+        scan_interval=int(state.get("scan_interval") or 10),
+        last_data_time=summary.get("last_data_time"),
+        throughput=float(summary.get("throughput") or 0.0),
+        started_at=state.get("started_at"),
+        started_by=state.get("started_by"),
+        stopped_at=state.get("stopped_at"),
+    )
+
+
+@router.post("/data/ingest")
+async def ingest_telemetry(
+    request: TelemetryIngestRequest,
+    user: UserContext = Depends(require_permissions("device:write")),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    _validate_ingest_points(tenant_id=tenant.tenant_id, points=request.points)
+    payload = []
+    for point in request.points:
+        payload.append(
+            {
+                "device_id": point.device_id,
+                "tag": point.tag,
+                "value": point.value,
+                "timestamp": point.timestamp or utc_now(),
+                "quality": point.quality,
+                "unit": point.unit,
+                "source": point.source or "collection_api",
+            }
+        )
+
+    ingest_result = telemetry_repository.ingest_points(
+        tenant_id=tenant.tenant_id,
+        points=payload,
+        source="collection_api",
+    )
+
+    touched_devices = list(dict.fromkeys(point.device_id for point in request.points))
+    for device_id in touched_devices:
+        device_repository.update_device(
+            device_id,
+            tenant_id=tenant.tenant_id,
+            updates={"status": "online", "last_seen": utc_now()},
+            updated_by=user.user_id,
+        )
+
+    return {
+        "success": True,
+        "message": "Telemetry points ingested",
+        "data": {
+            "count": ingest_result["count"],
+            "last_recorded_at": ingest_result["last_recorded_at"],
+            "tenant_id": tenant.tenant_id,
+            "device_count": len(touched_devices),
+        },
+    }
+
+
+@router.post("/data/query", response_model=DataQueryResponse)
+async def query_data(
+    request: DataQueryRequest,
+    user: UserContext = Depends(require_permissions("data:read")),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    if request.end_time <= request.start_time:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="end_time must be greater than start_time",
+        )
+
+    raw_result = telemetry_repository.query_points(
+        tenant_id=tenant.tenant_id,
+        tags=request.tags,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        device_ids=request.device_ids,
+        limit_per_tag=request.limit_per_tag,
+    )
+
+    response_data: Dict[str, List[DataPoint]] = {}
+    for tag, points in raw_result.items():
+        normalized = [
+            DataPoint(
+                timestamp=point["timestamp"],
+                value=float(point["value"]),
+                quality=point.get("quality", "good"),
+                device_id=point.get("device_id"),
+                unit=point.get("unit"),
+                source=point.get("source"),
+            )
+            for point in points
+        ]
+        if request.aggregation and request.aggregation != "raw":
+            normalized = _aggregate_points(normalized, request.aggregation, request.interval or "10m")
+        response_data[tag] = normalized
+
+    return DataQueryResponse(
+        tags=request.tags,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        data=response_data,
+    )
 
 
 @router.get("/data/latest")
 async def get_latest_data(
     tags: Optional[List[str]] = Query(None),
     user: UserContext = Depends(require_permissions("data:read")),
+    tenant: TenantContext = Depends(get_tenant_context),
 ):
-    """获取最新数据。"""
-    target_tags = tags or ["temperature", "pressure", "flow"]
-    now = utc_now()
-    result: Dict[str, Dict[str, object]] = {}
-
-    for tag in target_tags:
-        result[tag] = {
-            "timestamp": now.isoformat(),
-            "value": round(random.uniform(20.0, 50.0), 2),
-            "quality": "good",
-            "unit": "°C" if "temp" in tag.lower() else "bar",
+    target_tags = tags or _default_tags_for_tenant(tenant.tenant_id)
+    latest = telemetry_repository.get_latest_points(
+        tenant_id=tenant.tenant_id,
+        tags=target_tags,
+    )
+    return {
+        tag: {
+            "timestamp": payload["timestamp"].isoformat() if isinstance(payload["timestamp"], datetime) else payload["timestamp"],
+            "value": payload["value"],
+            "quality": payload["quality"],
+            "unit": payload.get("unit"),
+            "device_id": payload.get("device_id"),
+            "source": payload.get("source"),
         }
-    return result
+        for tag, payload in latest.items()
+    }
 
 
 @router.get("/data/realtime")
 async def get_realtime_data(
-    tag: str = Query(..., description="数据点位名称"),
+    tag: str = Query(..., description="Tag name"),
     limit: int = Query(100, ge=1, le=1000),
     user: UserContext = Depends(require_permissions("data:read")),
+    tenant: TenantContext = Depends(get_tenant_context),
 ):
-    """获取最近一段实时数据。"""
-    points = []
-    now = utc_now()
-    for index in range(limit):
-        timestamp = now - timedelta(seconds=limit - index)
-        base = 30.0
-        trend = index / max(limit, 1) * 5
-        noise = random.gauss(0, 1)
-        points.append(
-            {
-                "timestamp": timestamp.isoformat(),
-                "value": round(base + trend + noise, 2),
-                "quality": "good",
-            }
-        )
-
-    _collection_status["last_data_time"] = now
-    _data_store.setdefault(tag, []).extend(points[-10:])
-    _data_store[tag] = _data_store[tag][-500:]
-
+    points = telemetry_repository.get_recent_points(
+        tenant_id=tenant.tenant_id,
+        tag=tag,
+        limit=limit,
+    )
     return {
         "tag": tag,
         "count": len(points),
-        "data": points,
+        "data": [
+            {
+                "timestamp": point["timestamp"].isoformat() if isinstance(point["timestamp"], datetime) else point["timestamp"],
+                "value": point["value"],
+                "quality": point["quality"],
+                "device_id": point.get("device_id"),
+                "unit": point.get("unit"),
+                "source": point.get("source"),
+            }
+            for point in points
+        ],
     }

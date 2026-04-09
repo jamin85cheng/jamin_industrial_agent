@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
+import { authApi } from './lib/api'
 import { useAuthStore } from './stores/auth'
 
 const MainLayout = lazy(() => import('./components/Layout/MainLayout'))
@@ -7,6 +8,7 @@ const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Alerts = lazy(() => import('./pages/Alerts'))
 const Diagnosis = lazy(() => import('./pages/Diagnosis'))
+const Intelligence = lazy(() => import('./pages/Intelligence'))
 const Rules = lazy(() => import('./pages/Rules'))
 const Config = lazy(() => import('./pages/Config'))
 
@@ -17,7 +19,38 @@ const PageFallback = () => (
 )
 
 function ProtectedApp() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, token, user, updateUser } = useAuthStore()
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) {
+      return
+    }
+
+    if (user?.permissions && user.tenant_id !== undefined) {
+      return
+    }
+
+    let disposed = false
+
+    void authApi
+      .me()
+      .then((profile) => {
+        if (disposed) {
+          return
+        }
+        updateUser({
+          ...profile,
+          role: profile.roles?.[0] ?? user?.role ?? 'user',
+        })
+      })
+      .catch(() => {
+        // The global response interceptor handles invalid sessions.
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [isAuthenticated, token, updateUser, user?.permissions, user?.role, user?.tenant_id])
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -40,6 +73,7 @@ function ProtectedApp() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/diagnosis" element={<Diagnosis />} />
+            <Route path="/intelligence" element={<Intelligence />} />
             <Route path="/rules" element={<Rules />} />
             <Route path="/config" element={<Config />} />
           </Routes>

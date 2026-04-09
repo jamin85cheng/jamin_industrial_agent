@@ -17,12 +17,18 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.agents.camel_integration import IndustrialDiagnosisSociety
-from src.api.dependencies import UserContext, require_permissions
+from src.api.dependencies import UserContext, require_permissions, require_roles
 from src.api.repositories.alert_repository import AlertRepository
+from src.api.repositories.report_repository import ReportRepository
 from src.diagnosis.multi_agent_diagnosis import MultiAgentDiagnosisEngine
 from src.knowledge.graph_rag import graph_rag
 from src.models.agent_model_router import AgentModelRouter
 from src.models.diagnosis_report import DiagnosisReport, ReportGenerator
+from src.tasks.executor import (
+    build_diagnosis_task_executor,
+    get_diagnosis_execution_settings,
+    shutdown_diagnosis_task_executor,
+)
 from src.tasks.task_tracker import TaskPriority, TaskStatus, TrackedTask, task_tracker
 from src.utils.config import _resolve_config_path, load_config
 from src.utils.database_runtime import build_runtime_database_adapter
@@ -35,11 +41,19 @@ audit_logger = get_logger("diagnosis_audit")
 diagnosis_engine = MultiAgentDiagnosisEngine()
 camel_society = IndustrialDiagnosisSociety()
 alert_repository = AlertRepository()
+report_repository = ReportRepository()
 
 DIAGNOSIS_TIMEOUT_SECONDS = 2 * 60 * 60
 MODEL_PROBE_TIMEOUT_SECONDS = 10 * 60
 SSE_POLL_INTERVAL_SECONDS = 1.0
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
+diagnosis_runtime_state: Dict[str, Any] = {
+    "bootstrapped_at": None,
+    "executor": None,
+    "auto_resume_enabled": False,
+    "auto_resumed_task_ids": [],
+    "auto_resume_skipped_reason": None,
+}
 
 
 class DiagnosisRequestV2(BaseModel):
@@ -70,6 +84,10 @@ class AlertDiagnosisRequestV2(BaseModel):
     symptoms_override: Optional[str] = Field(None, min_length=5, description="Optional custom symptom summary")
 
 
+class TaskCancelRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=240, description="Optional cancellation reason")
+
+
 def _task_runtime_summary(task: TrackedTask) -> Dict[str, Any]:
     runtime = dict(task.metadata.get("task_runtime") or {})
     return {
@@ -79,6 +97,7 @@ def _task_runtime_summary(task: TrackedTask) -> Dict[str, Any]:
         "recoverable_state": bool(runtime.get("recoverable_state", True)),
         "target": runtime.get("target", task_tracker.persistence_target),
         "timeout_seconds": int(task.metadata.get("timeout_seconds", runtime.get("default_timeout_seconds", task_tracker.default_timeout))),
+        "executor": runtime.get("executor"),
     }
 
 
@@ -89,7 +108,11 @@ def _task_recovery_summary(task: TrackedTask) -> Dict[str, Any]:
     return {
         "restored_from_persistence": restored,
         "interrupted_by_restart": interrupted,
-        "resume_supported": False,
+        "resume_required": bool(recovery.get("resume_required", False)),
+        "resume_supported": _task_is_resumable(task),
+        "resume_count": int(recovery.get("resume_count", 0) or 0),
+        "last_resumed_at": recovery.get("last_resumed_at"),
+        "last_resumed_by": recovery.get("last_resumed_by"),
     }
 
 
@@ -125,6 +148,41 @@ def _task_workflow_summary(task: TrackedTask) -> Dict[str, Any]:
     }
 
 
+def _task_control_summary(task: TrackedTask) -> Dict[str, Any]:
+    return {
+        "cancellable": task.can_cancel(),
+        "retryable": task.can_retry() and task.task_type in {"multi_agent_diagnosis", "camel_diagnosis"},
+        "resumable": _task_is_resumable(task),
+        "cancel_requested_at": task.metadata.get("cancel_requested_at"),
+        "cancelled_by": task.metadata.get("cancelled_by"),
+        "cancellation_reason": task.metadata.get("cancellation_reason"),
+        "retry_count": int(task.metadata.get("retry_count", 0) or 0),
+        "retry_of_task_id": task.metadata.get("retry_of_task_id"),
+        "resume_count": int((task.metadata.get("recovery") or {}).get("resume_count", 0) or 0),
+    }
+
+
+def _get_diagnosis_task_executor(background_tasks: Optional[BackgroundTasks] = None):
+    config = load_config()
+    return build_diagnosis_task_executor(config, background_tasks=background_tasks, tracker=task_tracker)
+
+
+def _task_is_resumable(task: TrackedTask) -> bool:
+    return task.task_type in {"multi_agent_diagnosis", "camel_diagnosis"} and task.can_resume()
+
+
+def _diagnosis_execution_settings() -> Dict[str, Any]:
+    return get_diagnosis_execution_settings(load_config())
+
+
+def _diagnosis_auto_resume_enabled_for_task(task: Optional[TrackedTask] = None) -> bool:
+    settings = _diagnosis_execution_settings()
+    enabled = settings.get("backend") == "asyncio_queue" and bool(settings.get("auto_resume_recovered", False))
+    if task is not None:
+        enabled = enabled and bool((task.metadata.get("task_runtime") or {}).get("auto_resume", False))
+    return enabled
+
+
 def _build_task_response(task: TrackedTask) -> Dict[str, Any]:
     return {
         "task_id": task.task_id,
@@ -138,6 +196,7 @@ def _build_task_response(task: TrackedTask) -> Dict[str, Any]:
         "runtime": _task_runtime_summary(task),
         "recovery": _task_recovery_summary(task),
         "workflow": _task_workflow_summary(task),
+        "controls": _task_control_summary(task),
     }
 
 
@@ -310,6 +369,47 @@ def _export_report(report: DiagnosisReport, export_format: str) -> str:
     raise HTTPException(status_code=400, detail=f"Unsupported report format: {export_format}")
 
 
+def _report_media_type(export_format: str) -> str:
+    media_types = {
+        "html": "text/html; charset=utf-8",
+        "pdf": "application/pdf",
+        "markdown": "text/markdown; charset=utf-8",
+        "json": "application/json",
+    }
+    return media_types.get(export_format, "application/octet-stream")
+
+
+def _source_alert_id(task: TrackedTask) -> Optional[str]:
+    source_alert = task.metadata.get("source_alert")
+    if isinstance(source_alert, dict) and source_alert.get("alert_id"):
+        return str(source_alert["alert_id"])
+    return None
+
+
+def _link_task_to_source_alert(
+    *,
+    task: TrackedTask,
+    source_alert: Optional[Dict[str, Any]],
+    user: UserContext,
+    entrypoint: str,
+) -> None:
+    if not isinstance(source_alert, dict):
+        return
+    alert_id = source_alert.get("alert_id")
+    if not alert_id:
+        return
+    try:
+        alert_repository.link_diagnosis_task(
+            alert_id=str(alert_id),
+            task_id=task.task_id,
+            tenant_id=user.tenant_id or "default",
+            user_id=user.user_id,
+            entrypoint=entrypoint,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to link diagnosis task {task.task_id} to alert {alert_id}: {exc}")
+
+
 def _create_diagnosis_task(
     *,
     request: DiagnosisRequestV2,
@@ -332,7 +432,7 @@ def _create_diagnosis_task(
         "task_runtime": {
             "storage": task_tracker.storage_label,
             "persistent": True,
-            "auto_resume": False,
+            "auto_resume": _diagnosis_auto_resume_enabled_for_task(),
             "recoverable_state": True,
             "default_timeout_seconds": DIAGNOSIS_TIMEOUT_SECONDS,
             "target": task_tracker.persistence_target,
@@ -344,6 +444,11 @@ def _create_diagnosis_task(
             "round_summaries": [],
             "degraded_mode": False,
         },
+        "retry_count": 0,
+        "retry_of_task_id": None,
+        "cancel_requested_at": None,
+        "cancelled_by": None,
+        "cancellation_reason": None,
     }
     return task_tracker.create_task(
         task_type=task_type,
@@ -353,25 +458,16 @@ def _create_diagnosis_task(
     )
 
 
-def _dispatch_diagnosis_request(
+async def _dispatch_diagnosis_request(
     *,
     request: DiagnosisRequestV2,
     background_tasks: BackgroundTasks,
     user: UserContext,
     entrypoint: str = "manual",
     source_alert: Optional[Dict[str, Any]] = None,
+    retry_of_task_id: Optional[str] = None,
+    retry_count: int = 0,
 ) -> DiagnosisResponseV2:
-    sensor_data = request.sensor_data or {}
-    context = {
-        "user_id": user.user_id,
-        "tenant_id": user.tenant_id or "default",
-        "device_id": request.device_id,
-        "use_graph_rag": request.use_graph_rag,
-        "debug": request.debug,
-        "entrypoint": entrypoint,
-    }
-    engine, society = _refresh_runtime_services()
-
     if request.use_camel:
         task = _create_diagnosis_task(
             request=request,
@@ -381,15 +477,16 @@ def _dispatch_diagnosis_request(
             diagnosis_mode="camel",
         )
         task.metadata["entrypoint"] = entrypoint
+        task.metadata["retry_of_task_id"] = retry_of_task_id
+        task.metadata["retry_count"] = retry_count
         if source_alert:
             task.metadata["source_alert"] = source_alert
+            _link_task_to_source_alert(task=task, source_alert=source_alert, user=user, entrypoint=entrypoint)
         audit_logger.log_audit("create_diagnosis_task", user.user_id, task.task_id, "success", tenant_id=user.tenant_id, diagnosis_mode="camel", entrypoint=entrypoint)
-        background_tasks.add_task(_execute_camel_diagnosis, task, society, request.symptoms, sensor_data, request.debug)
-        return DiagnosisResponseV2(
-            diagnosis_id=task.task_id,
-            status="processing",
-            message="CAMEL diagnosis started. Query task status to fetch progress and result.",
-            task_id=task.task_id,
+        return await _schedule_existing_diagnosis_task(
+            task,
+            background_tasks=background_tasks,
+            entrypoint=entrypoint,
         )
 
     if request.use_multi_agent:
@@ -401,15 +498,16 @@ def _dispatch_diagnosis_request(
             diagnosis_mode="multi_agent",
         )
         task.metadata["entrypoint"] = entrypoint
+        task.metadata["retry_of_task_id"] = retry_of_task_id
+        task.metadata["retry_count"] = retry_count
         if source_alert:
             task.metadata["source_alert"] = source_alert
+            _link_task_to_source_alert(task=task, source_alert=source_alert, user=user, entrypoint=entrypoint)
         audit_logger.log_audit("create_diagnosis_task", user.user_id, task.task_id, "success", tenant_id=user.tenant_id, diagnosis_mode="multi_agent", entrypoint=entrypoint)
-        background_tasks.add_task(_execute_multi_agent_diagnosis, task, engine, request.symptoms, sensor_data, context, request.debug)
-        return DiagnosisResponseV2(
-            diagnosis_id=task.task_id,
-            status="processing",
-            message="Multi-agent diagnosis started. Query task status to fetch progress and result.",
-            task_id=task.task_id,
+        return await _schedule_existing_diagnosis_task(
+            task,
+            background_tasks=background_tasks,
+            entrypoint=entrypoint,
         )
 
     return DiagnosisResponseV2(
@@ -418,6 +516,128 @@ def _dispatch_diagnosis_request(
         message="Simple diagnosis completed",
         result={"symptoms": request.symptoms},
     )
+
+
+def _build_retry_request(task: TrackedTask) -> DiagnosisRequestV2:
+    diagnosis_mode = str(task.metadata.get("diagnosis_mode") or "multi_agent")
+    priority = task.priority.name.lower()
+    return DiagnosisRequestV2(
+        symptoms=str(task.metadata.get("symptoms") or task.description),
+        device_id=task.metadata.get("device_id"),
+        sensor_data=dict(task.metadata.get("sensor_data") or {}),
+        use_multi_agent=diagnosis_mode != "camel",
+        use_graph_rag=bool(task.metadata.get("use_graph_rag", True)),
+        use_camel=diagnosis_mode == "camel",
+        debug=bool(task.metadata.get("debug", False)),
+        priority=priority if priority in {"critical", "high", "normal", "low"} else "normal",
+    )
+
+
+async def _schedule_existing_diagnosis_task(
+    task: TrackedTask,
+    *,
+    background_tasks: Optional[BackgroundTasks],
+    entrypoint: str,
+    resumed_by: Optional[str] = None,
+) -> DiagnosisResponseV2:
+    diagnosis_mode = str(task.metadata.get("diagnosis_mode") or ("camel" if task.task_type == "camel_diagnosis" else "multi_agent"))
+    symptoms = str(task.metadata.get("symptoms") or task.description)
+    sensor_data = dict(task.metadata.get("sensor_data") or {})
+    debug = bool(task.metadata.get("debug", False))
+
+    task.error = None
+    task.result = None
+    task.started_at = None
+    task.completed_at = None
+    task.progress.current_step = 0
+    task.progress.percentage = 0.0
+    task.progress.estimated_remaining_seconds = None
+    task.progress.current_action = ""
+    task.metadata["entrypoint"] = entrypoint
+    task.metadata.setdefault("workflow", {})
+    task.metadata["workflow"]["status"] = "queued"
+    task.metadata["workflow"]["current_stage"] = "queued"
+
+    recovery = task.metadata.setdefault("recovery", {})
+
+    executor = _get_diagnosis_task_executor(background_tasks)
+    engine, society = _refresh_runtime_services()
+    context = {
+        "user_id": task.metadata.get("user_id"),
+        "tenant_id": task.metadata.get("tenant_id") or "default",
+        "device_id": task.metadata.get("device_id"),
+        "use_graph_rag": bool(task.metadata.get("use_graph_rag", True)),
+        "debug": debug,
+        "entrypoint": entrypoint,
+    }
+
+    if diagnosis_mode == "camel":
+        await executor.submit(task, _execute_camel_diagnosis, society, symptoms, sensor_data, debug)
+        message = "CAMEL diagnosis queued. Query task status to fetch progress and result."
+        if resumed_by:
+            message = "Recovered CAMEL diagnosis task resumed."
+    else:
+        await executor.submit(task, _execute_multi_agent_diagnosis, engine, symptoms, sensor_data, context, debug)
+        message = "Multi-agent diagnosis queued. Query task status to fetch progress and result."
+        if resumed_by:
+            message = "Recovered diagnosis task resumed."
+
+    if resumed_by:
+        recovery["resume_required"] = False
+        recovery["last_resumed_at"] = datetime.now(timezone.utc).isoformat()
+        recovery["last_resumed_by"] = resumed_by
+        recovery["resume_count"] = int(recovery.get("resume_count", 0) or 0) + 1
+        task_tracker.mark_task_queued(task.task_id, action=task.progress.current_action)
+
+    return DiagnosisResponseV2(
+        diagnosis_id=task.task_id,
+        status="processing",
+        message=message,
+        task_id=task.task_id,
+    )
+
+
+async def bootstrap_diagnosis_runtime() -> Dict[str, Any]:
+    config = load_config()
+    settings = get_diagnosis_execution_settings(config)
+    executor = build_diagnosis_task_executor(config, tracker=task_tracker)
+    resumed_task_ids = []
+    auto_resume_skipped_reason = None
+
+    if settings.get("auto_resume_recovered"):
+        if settings.get("backend") != "asyncio_queue":
+            auto_resume_skipped_reason = "Auto-resume requires the asyncio_queue executor backend."
+        else:
+            for task in task_tracker.list_tasks(limit=1000):
+                if not _task_is_resumable(task):
+                    continue
+                if not _diagnosis_auto_resume_enabled_for_task(task):
+                    continue
+                try:
+                    await _schedule_existing_diagnosis_task(
+                        task,
+                        background_tasks=None,
+                        entrypoint="auto_resume",
+                        resumed_by="system",
+                    )
+                    resumed_task_ids.append(task.task_id)
+                except Exception as exc:
+                    logger.warning(f"failed to auto-resume diagnosis task {task.task_id}: {exc}")
+
+    diagnosis_runtime_state.update(
+        {
+            "bootstrapped_at": datetime.now(timezone.utc).isoformat(),
+            "executor": executor.describe(),
+            "auto_resume_enabled": bool(settings.get("auto_resume_recovered", False)),
+            "auto_resumed_task_ids": resumed_task_ids,
+            "auto_resume_skipped_reason": auto_resume_skipped_reason,
+        }
+    )
+    return dict(diagnosis_runtime_state)
+
+
+async def shutdown_diagnosis_runtime() -> None:
+    await shutdown_diagnosis_task_executor(task_tracker)
 
 
 def _build_alert_symptoms(alert: Dict[str, Any]) -> str:
@@ -443,7 +663,7 @@ async def analyze_v2(
     background_tasks: BackgroundTasks,
     user: UserContext = Depends(require_permissions("data:read")),
 ):
-    return _dispatch_diagnosis_request(
+    return await _dispatch_diagnosis_request(
         request=request,
         background_tasks=background_tasks,
         user=user,
@@ -484,7 +704,7 @@ async def analyze_alert_v2(
         "tag": alert.get("tag"),
         "status": alert.get("status"),
     }
-    return _dispatch_diagnosis_request(
+    return await _dispatch_diagnosis_request(
         request=diagnosis_request,
         background_tasks=background_tasks,
         user=user,
@@ -576,6 +796,103 @@ async def get_diagnosis_task(task_id: str, user: UserContext = Depends(require_p
     _require_task_access(task, user)
     audit_logger.log_audit("read_diagnosis_task", user.user_id, task_id, "success", tenant_id=user.tenant_id)
     return _build_task_response(task)
+
+
+@router.post("/task/{task_id}/cancel")
+async def cancel_diagnosis_task(
+    task_id: str,
+    payload: TaskCancelRequest,
+    user: UserContext = Depends(require_permissions("data:read")),
+):
+    task = task_tracker.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _require_task_access(task, user)
+
+    cancelled = await task_tracker.cancel_task(
+        task_id,
+        cancelled_by=user.user_id,
+        reason=payload.reason,
+    )
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="Task can no longer be cancelled")
+
+    audit_logger.log_audit(
+        "cancel_diagnosis_task",
+        user.user_id,
+        task_id,
+        "success",
+        tenant_id=user.tenant_id,
+    )
+    return _build_task_response(cancelled)
+
+
+@router.post("/task/{task_id}/resume", response_model=DiagnosisResponseV2)
+async def resume_diagnosis_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    user: UserContext = Depends(require_permissions("data:read")),
+):
+    task = task_tracker.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _require_task_access(task, user)
+    if task.task_type not in {"multi_agent_diagnosis", "camel_diagnosis"}:
+        raise HTTPException(status_code=409, detail="Only diagnosis tasks support resume")
+    if not _task_is_resumable(task):
+        raise HTTPException(status_code=409, detail="Task is not in a resumable state")
+
+    resume_response = await _schedule_existing_diagnosis_task(
+        task,
+        background_tasks=background_tasks,
+        entrypoint="resume",
+        resumed_by=user.user_id,
+    )
+    audit_logger.log_audit(
+        "resume_diagnosis_task",
+        user.user_id,
+        task_id,
+        "success",
+        tenant_id=user.tenant_id,
+        resume_task_id=resume_response.task_id,
+    )
+    return resume_response
+
+
+@router.post("/task/{task_id}/retry", response_model=DiagnosisResponseV2)
+async def retry_diagnosis_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    user: UserContext = Depends(require_permissions("data:read")),
+):
+    task = task_tracker.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _require_task_access(task, user)
+    if task.task_type not in {"multi_agent_diagnosis", "camel_diagnosis"}:
+        raise HTTPException(status_code=409, detail="Only diagnosis tasks support retry")
+    if not task.can_retry():
+        raise HTTPException(status_code=409, detail="Task is not in a retryable state")
+
+    retry_request = _build_retry_request(task)
+    retry_response = await _dispatch_diagnosis_request(
+        request=retry_request,
+        background_tasks=background_tasks,
+        user=user,
+        entrypoint="retry",
+        source_alert=task.metadata.get("source_alert"),
+        retry_of_task_id=task.task_id,
+        retry_count=int(task.metadata.get("retry_count", 0) or 0) + 1,
+    )
+    audit_logger.log_audit(
+        "retry_diagnosis_task",
+        user.user_id,
+        task_id,
+        "success",
+        tenant_id=user.tenant_id,
+        retry_task_id=retry_response.task_id,
+    )
+    return retry_response
 
 
 @router.get("/task/{task_id}/events")
@@ -702,14 +1019,44 @@ async def export_diagnosis_report(
 
     report_model = _build_report_model(task)
     output_path = _export_report(report_model, format)
+    tenant_id = task.metadata.get("tenant_id") or user.tenant_id or "default"
+    alert_id = _source_alert_id(task)
+    report_record = report_repository.create_report(
+        report_id=report_model.report_id,
+        task_id=task_id,
+        diagnosis_id=report_model.diagnosis_id,
+        alert_id=alert_id,
+        tenant_id=str(tenant_id),
+        export_format=format,
+        file_path=output_path,
+        filename=Path(output_path).name,
+        media_type=_report_media_type(format),
+        created_by=user.user_id,
+        metadata={
+            "diagnosis_mode": task.metadata.get("diagnosis_mode"),
+            "device_id": task.metadata.get("device_id"),
+            "entrypoint": task.metadata.get("entrypoint"),
+        },
+        created_at=report_model.created_at,
+    )
+    if alert_id:
+        alert_repository.attach_report_to_alert(
+            alert_id=alert_id,
+            report_id=report_record["report_id"],
+            tenant_id=str(tenant_id),
+            user_id=user.user_id,
+            task_id=task_id,
+        )
     audit_logger.log_audit("export_diagnosis_report", user.user_id, task_id, "success", tenant_id=user.tenant_id, export_format=format)
     return {
         "task_id": task_id,
         "format": format,
-        "path": output_path,
-        "filename": Path(output_path).name,
-        "report_id": report_model.report_id,
-        "generated_at": report_model.created_at.isoformat(),
+        "filename": report_record["filename"],
+        "report_id": report_record["report_id"],
+        "generated_at": report_record["created_at"].isoformat(),
+        "download_url": report_record["download_url"],
+        "media_type": report_record["media_type"],
+        "alert_id": report_record.get("alert_id"),
     }
 
 
@@ -749,9 +1096,11 @@ async def get_society_status(user: UserContext = Depends(require_permissions("da
 
 
 @router.get("/runtime-debug")
-async def get_runtime_debug(user: UserContext = Depends(require_permissions("data:read"))):
+async def get_runtime_debug(user: UserContext = Depends(require_roles("admin"))):
     engine, society = _refresh_runtime_services(force=True)
     config = load_config()
+    execution_settings = get_diagnosis_execution_settings(config)
+    diagnosis_executor = build_diagnosis_task_executor(config)
     config_path = _resolve_config_path("config/settings.yaml")
     metadata_database = build_runtime_database_adapter(config.get("database", {}))
     route_keys = ["default", "mechanical", "electrical", "process", "sensor", "historical", "coordinator", "critic"]
@@ -782,6 +1131,9 @@ async def get_runtime_debug(user: UserContext = Depends(require_permissions("dat
             "configured_route_keys": sorted(list(config.get("llm", {}).get("agent_routing", {}).get("agents", {}).keys())),
             "endpoint_keys": sorted(list(config.get("llm", {}).get("endpoints", {}).keys())),
             "task_tracking_backend": config.get("database", {}).get("task_tracking", {}).get("backend"),
+            "diagnosis_execution_backend": execution_settings.get("backend"),
+            "diagnosis_execution_asyncio_workers": execution_settings.get("asyncio_workers"),
+            "diagnosis_execution_auto_resume_recovered": execution_settings.get("auto_resume_recovered"),
             "postgres_enabled": config.get("database", {}).get("postgres", {}).get("enabled"),
             "postgres_database": config.get("database", {}).get("postgres", {}).get("database"),
             "postgres_schema": config.get("database", {}).get("postgres", {}).get("schema"),
@@ -794,6 +1146,8 @@ async def get_runtime_debug(user: UserContext = Depends(require_permissions("dat
             "agent_runtime_profiles": engine.get_agent_runtime_profiles(),
             "society_agents": society.get_society_status().get("agents", []),
             "task_tracker": task_tracker.get_stats(),
+            "diagnosis_executor": diagnosis_executor.describe(),
+            "diagnosis_runtime_bootstrap": diagnosis_runtime_state,
             "metadata_database": {
                 "backend": metadata_database.backend,
                 "target": metadata_database.target,
@@ -803,7 +1157,7 @@ async def get_runtime_debug(user: UserContext = Depends(require_permissions("dat
 
 
 @router.post("/model-probe")
-async def probe_routed_models(user: UserContext = Depends(require_permissions("data:read"))):
+async def probe_routed_models(user: UserContext = Depends(require_roles("admin"))):
     engine, _ = _refresh_runtime_services()
     router_obj = engine.model_router
     route_keys = ["mechanical", "electrical", "process", "sensor", "historical", "coordinator", "critic"]

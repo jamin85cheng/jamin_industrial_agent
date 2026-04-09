@@ -1,6 +1,7 @@
 """API router package."""
 
 __all__ = [
+    "auth",
     "health",
     "devices",
     "collection",
@@ -8,4 +9,5 @@ __all__ = [
     "analysis",
     "knowledge",
     "diagnosis_v2",
+    "intelligence",
 ]

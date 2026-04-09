@@ -8,7 +8,7 @@
 import re
 import html
 from typing import Any, Dict, List, Optional, Union
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from dataclasses import dataclass
 from loguru import logger
@@ -43,6 +43,10 @@ class InputValidator:
     MAX_TAG_VALUE_LENGTH = 255
     MAX_FIELDS_COUNT = 100
     MAX_TAGS_COUNT = 50
+
+    @staticmethod
+    def _utc_now() -> datetime:
+        return datetime.now(timezone.utc)
     
     @classmethod
     def validate_measurement(cls, measurement: str) -> str:
@@ -165,7 +169,7 @@ class InputValidator:
             datetime对象
         """
         if timestamp is None:
-            return datetime.utcnow()
+            return cls._utc_now()
         
         if isinstance(timestamp, datetime):
             return timestamp
@@ -179,7 +183,7 @@ class InputValidator:
         
         if isinstance(timestamp, (int, float)):
             # 假设是Unix时间戳
-            return datetime.utcfromtimestamp(timestamp)
+            return datetime.fromtimestamp(timestamp, timezone.utc)
         
         raise ValidationError("timestamp", "不支持的时间戳类型")
     
@@ -229,6 +233,12 @@ class InputValidator:
         """检查危险字符"""
         value_lower = value.lower()
         for char in cls.DANGEROUS_CHARS:
+            if char == ';':
+                # Ignore semicolons that only exist inside escaped HTML entities
+                # such as ``&lt;`` or ``&#x27;``.
+                normalized = re.sub(r'&(?:[a-z]+|#x?[0-9a-f]+);', '', value_lower)
+                if char not in normalized:
+                    continue
             if char.lower() in value_lower:
                 logger.warning(f"检测到潜在的危险字符 '{char}' 在字段 {field_name}")
                 raise ValidationError(field_name, f"包含非法字符: {char}")
@@ -267,8 +277,8 @@ class RateLimiter:
         Returns:
             是否允许
         """
-        now = datetime.utcnow()
-        window_start = now - __import__('datetime').timedelta(seconds=self.window_seconds)
+        now = InputValidator._utc_now()
+        window_start = now - timedelta(seconds=self.window_seconds)
         
         # 清理过期记录
         if key in self._requests:
@@ -289,8 +299,8 @@ class RateLimiter:
     
     def get_remaining(self, key: str) -> int:
         """获取剩余请求次数"""
-        now = datetime.utcnow()
-        window_start = now - __import__('datetime').timedelta(seconds=self.window_seconds)
+        now = InputValidator._utc_now()
+        window_start = now - timedelta(seconds=self.window_seconds)
         
         if key not in self._requests:
             return self.max_requests

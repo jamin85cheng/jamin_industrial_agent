@@ -1,13 +1,16 @@
 ﻿import asyncio
 
 from datetime import datetime, timezone
+from pathlib import Path
 from fastapi import BackgroundTasks
 
 from src.agents.camel_integration import IndustrialDiagnosisSociety
 from src.api.dependencies import UserContext
+from src.api.repositories.alert_repository import AlertRepository
+from src.api.repositories.report_repository import ReportRepository
 from src.api.routers import diagnosis_v2
 from src.diagnosis.multi_agent_diagnosis import ExpertType, MultiAgentDiagnosisEngine
-from src.tasks.task_tracker import TaskPriority, TaskStatus, TrackedTask, task_tracker
+from src.tasks.task_tracker import TaskPriority, TaskStatus, TaskTracker, TrackedTask, task_tracker
 
 
 def test_multi_agent_diagnosis_integrates_graph_rag_context():
@@ -145,7 +148,13 @@ def test_diagnosis_v2_task_response_exposes_runtime_and_recovery():
         error="Task interrupted because the tracker process restarted.",
         metadata={
             "timeout_seconds": 7200,
-            "task_runtime": {"storage": "sqlite", "persistent": True, "auto_resume": False, "recoverable_state": True},
+            "task_runtime": {
+                "storage": "sqlite",
+                "persistent": True,
+                "auto_resume": False,
+                "recoverable_state": True,
+                "executor": {"backend": "background_tasks", "requested_backend": "background_tasks"},
+            },
             "recovery": {"restored_from_persistence": True},
         },
     )
@@ -155,9 +164,41 @@ def test_diagnosis_v2_task_response_exposes_runtime_and_recovery():
     assert payload["runtime"]["storage"] == "sqlite"
     assert payload["runtime"]["persistent"] is True
     assert payload["runtime"]["timeout_seconds"] == 7200
+    assert payload["runtime"]["executor"]["backend"] == "background_tasks"
     assert payload["recovery"]["restored_from_persistence"] is True
     assert payload["recovery"]["interrupted_by_restart"] is True
     assert payload["workflow"]["status"] == "interrupted"
+
+
+def test_diagnosis_v2_task_response_exposes_resume_for_recovered_queue():
+    task = TrackedTask(
+        task_id="TASK_RESUME",
+        task_type="multi_agent_diagnosis",
+        description="resume demo",
+        status=TaskStatus.QUEUED,
+        priority=TaskPriority.NORMAL,
+        created_at=datetime.now(timezone.utc),
+        metadata={
+            "task_runtime": {
+                "storage": "sqlite",
+                "persistent": True,
+                "auto_resume": False,
+                "recoverable_state": True,
+            },
+            "recovery": {
+                "restored_from_persistence": True,
+                "resume_required": True,
+                "resume_count": 1,
+            },
+        },
+    )
+
+    payload = diagnosis_v2._build_task_response(task)
+
+    assert payload["recovery"]["resume_supported"] is True
+    assert payload["recovery"]["resume_required"] is True
+    assert payload["controls"]["resumable"] is True
+    assert payload["controls"]["resume_count"] == 1
 
 
 def test_diagnosis_v2_task_event_stream_emits_snapshot_and_complete():
@@ -227,6 +268,332 @@ def test_diagnosis_v2_can_start_task_from_alert():
     assert response.task_id
     task = task_tracker.get_task(response.task_id)
     assert task is not None
+    assert task.status == TaskStatus.QUEUED
     assert task.metadata["entrypoint"] == "alert"
     assert task.metadata["source_alert"]["alert_id"] == "ALT_DEMO_01"
     assert task.metadata["device_id"] == "DEV_AERATION_01"
+    assert task.metadata["task_runtime"]["executor"]["backend"] == "background_tasks"
+
+
+def test_diagnosis_v2_task_response_exposes_controls():
+    task = TrackedTask(
+        task_id="TASK_CONTROL",
+        task_type="multi_agent_diagnosis",
+        description="control demo",
+        status=TaskStatus.CANCELLED,
+        priority=TaskPriority.NORMAL,
+        created_at=datetime.now(timezone.utc),
+        error="Task cancelled by user.",
+        metadata={
+            "retry_count": 1,
+            "retry_of_task_id": "TASK_PREVIOUS",
+            "cancel_requested_at": datetime.now(timezone.utc).isoformat(),
+            "cancelled_by": "operator",
+            "cancellation_reason": "duplicate diagnosis",
+        },
+    )
+
+    payload = diagnosis_v2._build_task_response(task)
+
+    assert payload["controls"]["cancellable"] is False
+    assert payload["controls"]["retryable"] is True
+    assert payload["controls"]["retry_count"] == 1
+    assert payload["controls"]["retry_of_task_id"] == "TASK_PREVIOUS"
+    assert payload["controls"]["cancelled_by"] == "operator"
+
+
+def test_diagnosis_v2_can_cancel_pending_task():
+    task = task_tracker.create_task(
+        task_type="multi_agent_diagnosis",
+        description="cancel demo",
+        priority=TaskPriority.NORMAL,
+        metadata={
+            "tenant_id": "default",
+            "diagnosis_mode": "multi_agent",
+            "execution_trace": [],
+        },
+    )
+    user = UserContext(user_id="operator", username="operator", roles=["operator"], tenant_id="default", permissions=["data:read"])
+
+    response = asyncio.run(
+        diagnosis_v2.cancel_diagnosis_task(
+            task.task_id,
+            diagnosis_v2.TaskCancelRequest(reason="cancel for retry"),
+            user,
+        )
+    )
+
+    assert response["status"] == "cancelled"
+    assert response["controls"]["retryable"] is True
+    assert response["controls"]["cancellation_reason"] == "cancel for retry"
+
+
+def test_diagnosis_v2_can_retry_cancelled_task():
+    task = task_tracker.create_task(
+        task_type="multi_agent_diagnosis",
+        description="retry demo",
+        priority=TaskPriority.NORMAL,
+        metadata={
+            "tenant_id": "default",
+            "diagnosis_mode": "multi_agent",
+            "execution_trace": [],
+            "symptoms": "曝气池溶解氧偏低，风机噪声异常",
+            "sensor_data": {"do": 1.4, "vibration": 8.2},
+            "use_graph_rag": True,
+            "debug": True,
+            "device_id": "DEV_RETRY_01",
+        },
+    )
+    task.status = TaskStatus.CANCELLED
+    task.error = "Task cancelled by user."
+    task.completed_at = datetime.now(timezone.utc)
+    user = UserContext(user_id="operator", username="operator", roles=["operator"], tenant_id="default", permissions=["data:read"])
+
+    response = asyncio.run(
+        diagnosis_v2.retry_diagnosis_task(
+            task.task_id,
+            BackgroundTasks(),
+            user,
+        )
+    )
+
+    assert response.status == "processing"
+    assert response.task_id
+    retry_task = task_tracker.get_task(response.task_id)
+    assert retry_task is not None
+    assert retry_task.metadata["retry_of_task_id"] == task.task_id
+    assert retry_task.metadata["retry_count"] == 1
+    assert retry_task.metadata["entrypoint"] == "retry"
+    assert retry_task.metadata["device_id"] == "DEV_RETRY_01"
+
+
+def test_diagnosis_v2_can_resume_recovered_queued_task():
+    task = task_tracker.create_task(
+        task_type="multi_agent_diagnosis",
+        description="resume demo",
+        priority=TaskPriority.NORMAL,
+        metadata={
+            "tenant_id": "default",
+            "user_id": "operator",
+            "diagnosis_mode": "multi_agent",
+            "execution_trace": [],
+            "symptoms": "曝气池溶解氧偏低，风机噪声异常",
+            "sensor_data": {"do": 1.3, "vibration": 8.1},
+            "use_graph_rag": True,
+            "debug": True,
+            "device_id": "DEV_RESUME_01",
+            "task_runtime": {
+                "storage": "sqlite",
+                "persistent": True,
+                "auto_resume": False,
+                "recoverable_state": True,
+                "target": "sqlite:///tasks.sqlite",
+            },
+            "recovery": {
+                "restored_from_persistence": True,
+                "resume_required": True,
+            },
+        },
+    )
+    task.status = TaskStatus.QUEUED
+    background_tasks = BackgroundTasks()
+    user = UserContext(user_id="operator", username="operator", roles=["operator"], tenant_id="default", permissions=["data:read"])
+
+    response = asyncio.run(
+        diagnosis_v2.resume_diagnosis_task(
+            task.task_id,
+            background_tasks,
+            user,
+        )
+    )
+
+    assert response.status == "processing"
+    assert response.task_id == task.task_id
+    assert len(background_tasks.tasks) == 1
+    resumed_task = task_tracker.get_task(task.task_id)
+    assert resumed_task is not None
+    assert resumed_task.metadata["entrypoint"] == "resume"
+    assert resumed_task.metadata["recovery"]["resume_required"] is False
+    assert resumed_task.metadata["recovery"]["last_resumed_by"] == "operator"
+    assert resumed_task.metadata["recovery"]["resume_count"] == 1
+
+
+def test_diagnosis_v2_bootstrap_auto_resumes_recovered_tasks(tmp_path, monkeypatch):
+    tracker = TaskTracker(db_path=tmp_path / "bootstrap_tasks.sqlite")
+    task = tracker.create_task(
+        task_type="multi_agent_diagnosis",
+        description="bootstrap resume demo",
+        priority=TaskPriority.NORMAL,
+        metadata={
+            "tenant_id": "default",
+            "user_id": "system",
+            "diagnosis_mode": "multi_agent",
+            "task_runtime": {
+                "storage": "sqlite",
+                "persistent": True,
+                "auto_resume": True,
+                "recoverable_state": True,
+                "target": str(tmp_path / "bootstrap_tasks.sqlite"),
+            },
+            "recovery": {
+                "restored_from_persistence": True,
+                "resume_required": True,
+            },
+        },
+    )
+    task.status = TaskStatus.QUEUED
+    resumed_task_ids = []
+
+    async def fake_schedule(task_obj, *, background_tasks, entrypoint, resumed_by):
+        resumed_task_ids.append(task_obj.task_id)
+        task_obj.metadata.setdefault("recovery", {})["resume_required"] = False
+        return diagnosis_v2.DiagnosisResponseV2(
+            diagnosis_id=task_obj.task_id,
+            status="processing",
+            message="auto resumed",
+            task_id=task_obj.task_id,
+        )
+
+    monkeypatch.setattr(diagnosis_v2, "task_tracker", tracker)
+    monkeypatch.setattr(
+        diagnosis_v2,
+        "load_config",
+        lambda *args, **kwargs: {
+            "diagnosis": {
+                "execution": {
+                    "backend": "asyncio_queue",
+                    "asyncio_workers": 1,
+                    "auto_resume_recovered": True,
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(diagnosis_v2, "_schedule_existing_diagnosis_task", fake_schedule)
+
+    state = asyncio.run(diagnosis_v2.bootstrap_diagnosis_runtime())
+
+    assert resumed_task_ids == [task.task_id]
+    assert state["auto_resume_enabled"] is True
+    assert state["auto_resumed_task_ids"] == [task.task_id]
+    assert state["auto_resume_skipped_reason"] is None
+
+
+def test_diagnosis_v2_bootstrap_skips_auto_resume_without_asyncio_backend(monkeypatch):
+    monkeypatch.setattr(
+        diagnosis_v2,
+        "load_config",
+        lambda *args, **kwargs: {
+            "diagnosis": {
+                "execution": {
+                    "backend": "background_tasks",
+                    "asyncio_workers": 1,
+                    "auto_resume_recovered": True,
+                }
+            }
+        },
+    )
+
+    state = asyncio.run(diagnosis_v2.bootstrap_diagnosis_runtime())
+
+    assert state["auto_resume_enabled"] is True
+    assert state["auto_resumed_task_ids"] == []
+    assert state["auto_resume_skipped_reason"] == "Auto-resume requires the asyncio_queue executor backend."
+
+
+def test_diagnosis_v2_export_report_persists_report_metadata_and_alert_link(tmp_path, monkeypatch):
+    metadata_path = tmp_path / "metadata.db"
+    alert_repo = AlertRepository(
+        {
+            "sqlite": {"path": str(metadata_path)},
+            "postgres": {"enabled": False},
+        }
+    )
+    report_repo = ReportRepository(
+        {
+            "sqlite": {"path": str(metadata_path)},
+            "postgres": {"enabled": False},
+        }
+    )
+    alert_repo.init_schema()
+    report_repo.init_schema()
+
+    alert_id = alert_repo.create_alert(
+        rule_id=None,
+        message="曝气池溶解氧持续偏低",
+        severity="critical",
+        device_id="DEV_EXPORT_01",
+        tag="DO",
+        value=1.5,
+        threshold=2.0,
+        tenant_id="default",
+    )
+
+    task = task_tracker.create_task(
+        task_type="multi_agent_diagnosis",
+        description="report export demo",
+        priority=TaskPriority.NORMAL,
+        metadata={
+            "tenant_id": "default",
+            "user_id": "operator",
+            "device_id": "DEV_EXPORT_01",
+            "diagnosis_mode": "multi_agent",
+            "execution_trace": [],
+            "entrypoint": "alert",
+            "source_alert": {"alert_id": alert_id},
+        },
+    )
+    task.status = TaskStatus.COMPLETED
+    task.completed_at = datetime.now(timezone.utc)
+    task.result = {
+        "diagnosis_id": "DIAG_EXPORT_01",
+        "symptoms": "曝气池溶解氧持续偏低",
+        "final_conclusion": "怀疑鼓风机效率下降",
+        "confidence": 0.87,
+        "expert_opinions": [
+            {
+                "expert_name": "机械专家",
+                "root_cause": "鼓风机叶轮磨损",
+            }
+        ],
+        "recommended_actions": [
+            {"action": "安排鼓风机巡检"},
+        ],
+        "related_cases": ["CASE_EXPORT_01"],
+        "spare_parts": [{"name": "风机叶轮"}],
+    }
+
+    report_file = tmp_path / "diagnosis-report.html"
+    report_file.write_text("<html><body>report</body></html>", encoding="utf-8")
+
+    monkeypatch.setattr(diagnosis_v2, "alert_repository", alert_repo)
+    monkeypatch.setattr(diagnosis_v2, "report_repository", report_repo)
+    monkeypatch.setattr(diagnosis_v2, "_export_report", lambda report, export_format: str(report_file))
+
+    user = UserContext(
+        user_id="operator",
+        username="operator",
+        roles=["operator"],
+        tenant_id="default",
+        permissions=["report:read", "report:export"],
+    )
+
+    response = asyncio.run(
+        diagnosis_v2.export_diagnosis_report(
+            task.task_id,
+            format="html",
+            user=user,
+        )
+    )
+
+    assert "path" not in response
+    assert response["report_id"]
+    assert response["download_url"] == f"/reports/{response['report_id']}/download"
+
+    persisted = report_repo.get_report(response["report_id"], tenant_id="default")
+    assert persisted is not None
+    assert persisted["task_id"] == task.task_id
+    assert persisted["filename"] == Path(report_file).name
+
+    linked_alert = alert_repo.get_alert(alert_id, tenant_id="default")
+    assert linked_alert is not None
+    assert linked_alert["latest_report_id"] == response["report_id"]

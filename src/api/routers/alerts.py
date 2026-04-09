@@ -54,6 +54,12 @@ class Alert(BaseModel):
     acknowledged_by: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
+    diagnosis_task_id: Optional[str] = None
+    latest_report_id: Optional[str] = None
+    latest_report_download_url: Optional[str] = None
+    last_action_by: Optional[str] = None
+    last_action_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
 
 
 class AlertListResponse(BaseModel):
@@ -65,15 +71,8 @@ class AcknowledgeRequest(BaseModel):
     comment: Optional[str] = None
 
 
-def init_default_rules():
-    alert_repository.init_schema()
-    alert_repository.seed_default_rules()
-
-
-def init_default_alerts():
-    """初始化演示告警。"""
-    alert_repository.init_schema()
-    alert_repository.seed_demo_alerts()
+class ResolveRequest(BaseModel):
+    notes: Optional[str] = None
 
 
 @router.get("", response_model=AlertListResponse)
@@ -139,11 +138,17 @@ async def acknowledge_alert(
 @router.post("/{alert_id}/resolve")
 async def resolve_alert(
     alert_id: str,
+    request: ResolveRequest,
     user: UserContext = Depends(require_permissions("alert:acknowledge")),
     tenant: TenantContext = Depends(get_tenant_context),
 ):
     """解决告警。"""
-    alert = alert_repository.resolve_alert(alert_id, tenant_id=tenant.tenant_id, user_id=user.user_id)
+    alert = alert_repository.resolve_alert(
+        alert_id,
+        tenant_id=tenant.tenant_id,
+        user_id=user.user_id,
+        resolution_notes=request.notes,
+    )
     if not alert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"告警 {alert_id} 不存在")
     return {
@@ -152,6 +157,7 @@ async def resolve_alert(
         "data": {
             "alert_id": alert_id,
             "resolved_at": alert["resolved_at"].isoformat() if alert.get("resolved_at") else None,
+            "resolution_notes": alert.get("resolution_notes"),
         },
     }
 

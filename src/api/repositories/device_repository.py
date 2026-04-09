@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.utils.config import load_config
 from src.utils.database_runtime import build_runtime_database_adapter
+from src.utils.runtime_migrations import apply_runtime_schema_migrations
 
 
 def utc_now() -> datetime:
@@ -65,15 +66,43 @@ class DeviceRepository:
         for key in ("created_at", "updated_at", "last_seen"):
             normalized[key] = _parse_datetime(normalized.get(key))
         normalized["tag_count"] = int(normalized.get("tag_count") or 0)
+        normalized["scan_interval"] = int(normalized.get("scan_interval") or 10)
+        normalized["rack"] = normalized.get("rack") if normalized.get("rack") is not None else 0
+        normalized["slot"] = normalized.get("slot") if normalized.get("slot") is not None else 1
+        enabled = normalized.get("enabled", True)
+        normalized["enabled"] = enabled == 1 if isinstance(enabled, int) else bool(enabled)
+        return normalized
+
+    def _normalize_runtime_device_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(row)
+        for key in ("created_at", "updated_at", "last_seen"):
+            normalized[key] = _parse_datetime(normalized.get(key))
+        normalized["scan_interval"] = int(normalized.get("scan_interval") or 10)
+        normalized["rack"] = normalized.get("rack") if normalized.get("rack") is not None else 0
+        normalized["slot"] = normalized.get("slot") if normalized.get("slot") is not None else 1
+        enabled = normalized.get("enabled", True)
+        if isinstance(enabled, int):
+            normalized["enabled"] = enabled == 1
+        else:
+            normalized["enabled"] = bool(enabled)
         return normalized
 
     def _normalize_tag_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        deadband = row.get("deadband")
+        try:
+            deadband = float(deadband) if deadband not in (None, "") else None
+        except (TypeError, ValueError):
+            deadband = None
         return {
             "name": row["name"],
             "address": row["address"],
             "data_type": row.get("data_type") or "float",
             "unit": row.get("unit"),
             "description": row.get("description"),
+            "asset_id": row.get("asset_id"),
+            "point_key": row.get("point_key"),
+            "deadband": deadband,
+            "debounce_ms": int(row.get("debounce_ms") or 0),
         }
 
     def _table(self, table_name: str) -> str:
@@ -84,83 +113,43 @@ class DeviceRepository:
     def _placeholder(self) -> str:
         return "%s" if self.backend == "postgres" else "?"
 
+    def _sqlite_columns(self, connection, table_name: str) -> List[str]:
+        cursor = connection.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return [str(row[1]) for row in cursor.fetchall()]
+
+    def _ensure_sqlite_column(self, connection, table_name: str, column_name: str, column_definition: str) -> None:
+        if column_name in self._sqlite_columns(connection, table_name):
+            return
+        cursor = connection.cursor()
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+    def _ensure_device_tag_extensions(self, connection) -> None:
+        cursor = connection.cursor()
+        if self.backend == "postgres":
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".device_tags ADD COLUMN IF NOT EXISTS asset_id TEXT NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".device_tags ADD COLUMN IF NOT EXISTS point_key TEXT NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".device_tags ADD COLUMN IF NOT EXISTS deadband DOUBLE PRECISION NULL'
+            )
+            cursor.execute(
+                f'ALTER TABLE "{self.schema}".device_tags ADD COLUMN IF NOT EXISTS debounce_ms INTEGER NOT NULL DEFAULT 0'
+            )
+            return
+
+        self._ensure_sqlite_column(connection, "device_tags", "asset_id", "asset_id TEXT NULL")
+        self._ensure_sqlite_column(connection, "device_tags", "point_key", "point_key TEXT NULL")
+        self._ensure_sqlite_column(connection, "device_tags", "deadband", "deadband REAL NULL")
+        self._ensure_sqlite_column(connection, "device_tags", "debounce_ms", "debounce_ms INTEGER NOT NULL DEFAULT 0")
+
     def init_schema(self) -> None:
+        apply_runtime_schema_migrations(self.db_config)
         with self._connect() as connection:
-            cursor = connection.cursor()
-            if self.backend == "postgres":
-                cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS "{self.schema}".devices (
-                        id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        type TEXT NOT NULL,
-                        host TEXT NOT NULL,
-                        port INTEGER NOT NULL,
-                        rack INTEGER,
-                        slot INTEGER,
-                        scan_interval INTEGER NOT NULL DEFAULT 10,
-                        status TEXT NOT NULL DEFAULT 'offline',
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        last_seen TIMESTAMPTZ NULL,
-                        created_at TIMESTAMPTZ NOT NULL,
-                        updated_at TIMESTAMPTZ NOT NULL,
-                        tenant_id TEXT NOT NULL,
-                        created_by TEXT NULL,
-                        updated_by TEXT NULL
-                    )
-                    """
-                )
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS "{self.schema}".device_tags (
-                        device_id TEXT NOT NULL REFERENCES "{self.schema}".devices(id) ON DELETE CASCADE,
-                        name TEXT NOT NULL,
-                        address TEXT NOT NULL,
-                        data_type TEXT NOT NULL DEFAULT 'float',
-                        unit TEXT NULL,
-                        description TEXT NULL,
-                        PRIMARY KEY(device_id, name)
-                    )
-                    """
-                )
-            else:
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS devices (
-                        id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        type TEXT NOT NULL,
-                        host TEXT NOT NULL,
-                        port INTEGER NOT NULL,
-                        rack INTEGER,
-                        slot INTEGER,
-                        scan_interval INTEGER NOT NULL DEFAULT 10,
-                        status TEXT NOT NULL DEFAULT 'offline',
-                        enabled INTEGER NOT NULL DEFAULT 1,
-                        last_seen TEXT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        tenant_id TEXT NOT NULL,
-                        created_by TEXT NULL,
-                        updated_by TEXT NULL
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS device_tags (
-                        device_id TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        address TEXT NOT NULL,
-                        data_type TEXT NOT NULL DEFAULT 'float',
-                        unit TEXT NULL,
-                        description TEXT NULL,
-                        PRIMARY KEY(device_id, name),
-                        FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
-                    )
-                    """
-                )
+            self._ensure_device_tag_extensions(connection)
             connection.commit()
 
     def seed_demo_devices(self, tenant_id: str = "default") -> None:
@@ -277,8 +266,9 @@ class DeviceRepository:
                     cursor.execute(
                         f"""
                         INSERT INTO "{self.schema}".device_tags (
-                            device_id, name, address, data_type, unit, description
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                            device_id, name, address, data_type, unit, description,
+                            asset_id, point_key, deadband, debounce_ms
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             device["id"],
@@ -287,6 +277,10 @@ class DeviceRepository:
                             tag.get("data_type", "float"),
                             tag.get("unit"),
                             tag.get("description"),
+                            tag.get("asset_id"),
+                            tag.get("point_key"),
+                            tag.get("deadband"),
+                            int(tag.get("debounce_ms", 0) or 0),
                         ),
                     )
             else:
@@ -321,8 +315,9 @@ class DeviceRepository:
                     cursor.execute(
                         """
                         INSERT INTO device_tags (
-                            device_id, name, address, data_type, unit, description
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            device_id, name, address, data_type, unit, description,
+                            asset_id, point_key, deadband, debounce_ms
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             device["id"],
@@ -331,6 +326,10 @@ class DeviceRepository:
                             tag.get("data_type", "float"),
                             tag.get("unit"),
                             tag.get("description"),
+                            tag.get("asset_id"),
+                            tag.get("point_key"),
+                            tag.get("deadband"),
+                            int(tag.get("debounce_ms", 0) or 0),
                         ),
                     )
             connection.commit()
@@ -358,12 +357,12 @@ class DeviceRepository:
 
         count_sql = f"SELECT COUNT(*) AS total FROM {self._table('devices')} d WHERE {where_clause}"
         data_sql = (
-            f"SELECT d.id, d.name, d.type, d.host, d.port, d.status, d.last_seen, "
-            f"d.created_at, d.updated_at, d.tenant_id, COUNT(t.name) AS tag_count "
+            f"SELECT d.id, d.name, d.type, d.host, d.port, d.rack, d.slot, d.scan_interval, d.enabled, "
+            f"d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id, COUNT(t.name) AS tag_count "
             f"FROM {self._table('devices')} d "
             f"LEFT JOIN {self._table('device_tags')} t ON t.device_id = d.id "
             f"WHERE {where_clause} "
-            f"GROUP BY d.id, d.name, d.type, d.host, d.port, d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id "
+            f"GROUP BY d.id, d.name, d.type, d.host, d.port, d.rack, d.slot, d.scan_interval, d.enabled, d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id "
             f"ORDER BY d.updated_at DESC "
             f"LIMIT {placeholder} OFFSET {placeholder}"
         )
@@ -382,12 +381,12 @@ class DeviceRepository:
     def get_device(self, device_id: str, *, tenant_id: str) -> Optional[Dict[str, Any]]:
         placeholder = self._placeholder()
         sql = (
-            f"SELECT d.id, d.name, d.type, d.host, d.port, d.status, d.last_seen, "
-            f"d.created_at, d.updated_at, d.tenant_id, COUNT(t.name) AS tag_count "
+            f"SELECT d.id, d.name, d.type, d.host, d.port, d.rack, d.slot, d.scan_interval, d.enabled, "
+            f"d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id, COUNT(t.name) AS tag_count "
             f"FROM {self._table('devices')} d "
             f"LEFT JOIN {self._table('device_tags')} t ON t.device_id = d.id "
             f"WHERE d.id = {placeholder} AND d.tenant_id = {placeholder} "
-            f"GROUP BY d.id, d.name, d.type, d.host, d.port, d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id"
+            f"GROUP BY d.id, d.name, d.type, d.host, d.port, d.rack, d.slot, d.scan_interval, d.enabled, d.status, d.last_seen, d.created_at, d.updated_at, d.tenant_id"
         )
         with self._connect() as connection:
             cursor = connection.cursor()
@@ -399,7 +398,7 @@ class DeviceRepository:
         if not self.get_device(device_id, tenant_id=tenant_id):
             return []
         sql = (
-            f"SELECT name, address, data_type, unit, description "
+            f"SELECT name, address, data_type, unit, description, asset_id, point_key, deadband, debounce_ms "
             f"FROM {self._table('device_tags')} "
             f"WHERE device_id = {self._placeholder()} ORDER BY name"
         )
@@ -407,6 +406,38 @@ class DeviceRepository:
             cursor = connection.cursor()
             cursor.execute(sql, (device_id,))
             return [self._normalize_tag_row(row) for row in self._fetch_all(cursor)]
+
+    def list_runtime_devices(
+        self,
+        *,
+        tenant_id: str,
+        device_ids: Optional[Sequence[str]] = None,
+        enabled_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        filters = [f"tenant_id = {self._placeholder()}"]
+        params: List[Any] = [tenant_id]
+        if enabled_only:
+            filters.append("enabled = 1" if self.backend == "sqlite" else "enabled = TRUE")
+        if device_ids:
+            placeholders = ", ".join(self._placeholder() for _ in device_ids)
+            filters.append(f"id IN ({placeholders})")
+            params.extend(device_ids)
+
+        sql = (
+            f"SELECT id, name, type, host, port, rack, slot, scan_interval, "
+            f"status, enabled, last_seen, created_at, updated_at, tenant_id "
+            f"FROM {self._table('devices')} "
+            f"WHERE {' AND '.join(filters)} "
+            f"ORDER BY updated_at DESC"
+        )
+        with self._connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(sql, tuple(params))
+            return [self._normalize_runtime_device_row(row) for row in self._fetch_all(cursor)]
+
+    def get_runtime_device(self, device_id: str, *, tenant_id: str) -> Optional[Dict[str, Any]]:
+        records = self.list_runtime_devices(tenant_id=tenant_id, device_ids=[device_id], enabled_only=False)
+        return records[0] if records else None
 
     def update_device(
         self,
@@ -446,6 +477,71 @@ class DeviceRepository:
             connection.commit()
         return self.get_device(device_id, tenant_id=tenant_id)
 
+    def replace_tags(
+        self,
+        device_id: str,
+        *,
+        tenant_id: str,
+        tags: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not self.get_device(device_id, tenant_id=tenant_id):
+            return []
+
+        with self._connect() as connection:
+            cursor = connection.cursor()
+            if self.backend == "postgres":
+                cursor.execute(
+                    f'DELETE FROM "{self.schema}".device_tags WHERE device_id = %s',
+                    (device_id,),
+                )
+                for tag in tags:
+                    cursor.execute(
+                        f"""
+                        INSERT INTO "{self.schema}".device_tags (
+                            device_id, name, address, data_type, unit, description,
+                            asset_id, point_key, deadband, debounce_ms
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            device_id,
+                            tag["name"],
+                            tag["address"],
+                            tag.get("data_type", "float"),
+                            tag.get("unit"),
+                            tag.get("description"),
+                            tag.get("asset_id"),
+                            tag.get("point_key"),
+                            tag.get("deadband"),
+                            int(tag.get("debounce_ms", 0) or 0),
+                        ),
+                    )
+            else:
+                cursor.execute("DELETE FROM device_tags WHERE device_id = ?", (device_id,))
+                for tag in tags:
+                    cursor.execute(
+                        """
+                        INSERT INTO device_tags (
+                            device_id, name, address, data_type, unit, description,
+                            asset_id, point_key, deadband, debounce_ms
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            device_id,
+                            tag["name"],
+                            tag["address"],
+                            tag.get("data_type", "float"),
+                            tag.get("unit"),
+                            tag.get("description"),
+                            tag.get("asset_id"),
+                            tag.get("point_key"),
+                            tag.get("deadband"),
+                            int(tag.get("debounce_ms", 0) or 0),
+                        ),
+                    )
+            connection.commit()
+
+        return self.list_tags(device_id, tenant_id=tenant_id)
+
     def delete_device(self, device_id: str, *, tenant_id: str) -> bool:
         if not self.get_device(device_id, tenant_id=tenant_id):
             return False
@@ -474,4 +570,3 @@ class DeviceRepository:
         if status == "online":
             updates["last_seen"] = utc_now()
         return self.update_device(device_id, tenant_id=tenant_id, updates=updates, updated_by=updated_by)
-

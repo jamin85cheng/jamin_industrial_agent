@@ -9,16 +9,21 @@ interface Props {
   loading?: boolean
   onAttach: (taskId: string) => void
   onExport: (taskId: string, format: 'html' | 'pdf' | 'markdown' | 'json') => void
+  onRetry: (taskId: string) => void
+  onResume: (taskId: string) => void
+  onCancel: (taskId: string) => void
 }
 
 const statusLabel = (value?: string) => {
   const labels: Record<string, string> = {
+    queued: '排队中',
     pending: '排队中',
     running: '运行中',
     completed: '已完成',
     failed: '失败',
     timeout: '超时',
-    interrupted: '中断',
+    cancelled: '已取消',
+    interrupted: '已中断',
     recovered: '已恢复',
   }
   return labels[value || ''] || value || '未知'
@@ -33,8 +38,8 @@ const stageLabel = (value?: string) => {
     graph_rag_failed: 'GraphRAG 检索失败',
     expert_started: '专家分析开始',
     expert_completed: '专家分析完成',
-    coordinator_started: '协调者整合开始',
-    coordinator_completed: '协调者整合完成',
+    coordinator_started: '协调器整合开始',
+    coordinator_completed: '协调器整合完成',
     debate_started: 'CAMEL 协作开始',
     debate_round_started: '协作轮次开始',
     debate_round_completed: '协作轮次完成',
@@ -44,10 +49,10 @@ const stageLabel = (value?: string) => {
   return labels[value || ''] || value || '等待启动'
 }
 
-const TaskQueuePanel: React.FC<Props> = ({ tasks, loading, onAttach, onExport }) => (
+const TaskQueuePanel: React.FC<Props> = ({ tasks, loading, onAttach, onExport, onRetry, onResume, onCancel }) => (
   <Card title="持久化任务队列" className="studio-card" loading={loading}>
     <Paragraph type="secondary" className="compact-paragraph">
-      诊断任务会持久化保存，因此运维人员可以重新打开任务、查看恢复状态，并在完成后导出报告。当前卡片会直接显示任务使用的是 Postgres 还是 SQLite。
+      诊断任务会持久化保存，因此运维人员可以重新接管任务、查看恢复状态，并在完成后导出报告。
     </Paragraph>
     {tasks.length ? (
       <List
@@ -58,6 +63,34 @@ const TaskQueuePanel: React.FC<Props> = ({ tasks, loading, onAttach, onExport })
             actions={[
               <Button key={`attach-${task.task_id}`} type="link" size="small" onClick={() => onAttach(task.task_id)}>
                 接管
+              </Button>,
+              <Button
+                key={`resume-${task.task_id}`}
+                type="link"
+                size="small"
+                disabled={!task.controls?.resumable}
+                onClick={() => onResume(task.task_id)}
+              >
+                恢复
+              </Button>,
+              <Button
+                key={`retry-${task.task_id}`}
+                type="link"
+                size="small"
+                disabled={!task.controls?.retryable}
+                onClick={() => onRetry(task.task_id)}
+              >
+                重试
+              </Button>,
+              <Button
+                key={`cancel-${task.task_id}`}
+                type="link"
+                size="small"
+                danger
+                disabled={!task.controls?.cancellable}
+                onClick={() => onCancel(task.task_id)}
+              >
+                取消
               </Button>,
               <Button
                 key={`report-${task.task_id}`}
@@ -76,15 +109,23 @@ const TaskQueuePanel: React.FC<Props> = ({ tasks, loading, onAttach, onExport })
                 <Tag color={(task.workflow?.status || task.status) === 'completed' ? 'success' : 'processing'}>
                   {statusLabel(task.workflow?.status || task.status)}
                 </Tag>
-                <Tag color={task.runtime?.storage === 'postgres' ? 'geekblue' : 'default'}>{task.runtime?.storage || 'sqlite'}</Tag>
+                <Tag color={task.runtime?.storage === 'postgres' ? 'geekblue' : 'default'}>
+                  {task.runtime?.storage || 'sqlite'}
+                </Tag>
                 {task.recovery?.restored_from_persistence ? <Tag color="gold">已恢复</Tag> : null}
                 {task.recovery?.interrupted_by_restart ? <Tag color="red">重启中断</Tag> : null}
+                {task.controls?.retry_count ? <Tag color="purple">重试 {task.controls.retry_count}</Tag> : null}
               </Space>
-              <Text strong>{stageLabel(task.workflow?.current_stage || String((task.progress as { current_action?: string })?.current_action || 'queued'))}</Text>
+              <Text strong>
+                {stageLabel(task.workflow?.current_stage || String((task.progress as { current_action?: string })?.current_action || 'queued'))}
+              </Text>
               <Text type="secondary">
                 轮次 {task.workflow?.current_round || 0} · 进度 {Math.round(Number((task.progress as { percentage?: number })?.percentage || 0))}% ·
                 超时预算 {task.runtime?.timeout_seconds ?? '-'} 秒
               </Text>
+              {task.controls?.cancellation_reason ? (
+                <Text type="secondary">取消原因：{task.controls.cancellation_reason}</Text>
+              ) : null}
               {task.runtime?.target ? <Text type="secondary">存储目标：{task.runtime.target}</Text> : null}
             </Space>
           </List.Item>

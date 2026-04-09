@@ -1,7 +1,6 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  # ==================== 后端服务 ====================
   backend:
     build:
       context: ../..
@@ -9,11 +8,19 @@ services:
     container_name: jamin-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8600:8600"
     environment:
       - API_HOST=0.0.0.0
-      - API_PORT=8000
+      - API_PORT=8600
       - DEBUG=false
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-jamin_industrial_agent}
+      - POSTGRES_MAINTENANCE_DB=${POSTGRES_MAINTENANCE_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_SCHEMA=${POSTGRES_SCHEMA:-jamin_industrial_agent}
+      - TASK_TRACKING_BACKEND=postgres
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=jamin-token
       - INFLUXDB_ORG=jamin
@@ -25,17 +32,17 @@ services:
       - ../../logs:/app/logs
       - ../../config:/app/config
     depends_on:
+      - postgres
       - influxdb
       - redis
     networks:
       - jamin-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8600/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # ==================== 前端服务 ====================
   frontend:
     build:
       context: ../..
@@ -49,7 +56,26 @@ services:
     networks:
       - jamin-network
 
-  # ==================== 时序数据库 ====================
+  postgres:
+    image: postgres:16-alpine
+    container_name: jamin-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-jamin_industrial_agent}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - jamin-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-jamin_industrial_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   influxdb:
     image: influxdb:2.7
     container_name: jamin-influxdb
@@ -69,7 +95,6 @@ services:
     networks:
       - jamin-network
 
-  # ==================== 缓存服务 ====================
   redis:
     image: redis:7-alpine
     container_name: jamin-redis
@@ -81,7 +106,6 @@ services:
     networks:
       - jamin-network
 
-  # ==================== 向量数据库 ====================
   chromadb:
     image: chromadb/chroma:latest
     container_name: jamin-chromadb
@@ -93,7 +117,6 @@ services:
     networks:
       - jamin-network
 
-  # ==================== 监控 ====================
   prometheus:
     image: prom/prometheus:latest
     container_name: jamin-prometheus
@@ -120,13 +143,12 @@ services:
     networks:
       - jamin-network
 
-# ==================== 网络 ====================
 networks:
   jamin-network:
     driver: bridge
 
-# ==================== 卷 ====================
 volumes:
+  postgres-data:
   influxdb-data:
   redis-data:
   chromadb-data:

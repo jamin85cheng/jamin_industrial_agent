@@ -1,21 +1,6 @@
-# Docker Compose 生产环境配置
-# 
-# 使用方法:
-#   docker-compose -f docker-compose.prod.yml up -d
-#
-# 包含:
-# - 应用服务 (3个副本)
-# - InfluxDB 时序数据库
-# - Redis 缓存
-# - ChromaDB 向量数据库
-# - Nginx 负载均衡
-# - Prometheus 监控
-# - Grafana 可视化
-
-version: '3.8'
+version: "3.8"
 
 services:
-  # 应用服务
   app:
     build:
       context: ..
@@ -26,10 +11,10 @@ services:
       replicas: 3
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"
           memory: 2G
         reservations:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
       restart_policy:
         condition: any
@@ -38,6 +23,14 @@ services:
     environment:
       - JAMIN_ENV=production
       - JAMIN_CONFIG=/app/config/settings.yaml
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-jamin_industrial_agent}
+      - POSTGRES_MAINTENANCE_DB=${POSTGRES_MAINTENANCE_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_SCHEMA=${POSTGRES_SCHEMA:-jamin_industrial_agent}
+      - TASK_TRACKING_BACKEND=postgres
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
       - INFLUXDB_ORG=jamin
@@ -45,6 +38,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHROMADB_HOST=chromadb
       - CHROMADB_PORT=8000
+      - API_PORT=8600
       - LOG_LEVEL=INFO
       - WORKERS=4
     volumes:
@@ -55,17 +49,41 @@ services:
     networks:
       - app-network
     depends_on:
+      - postgres
       - influxdb
       - redis
       - chromadb
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8600/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # InfluxDB 时序数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: jamin-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-jamin_industrial_agent}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-jamin_industrial_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   influxdb:
     image: influxdb:2.6-alpine
     container_name: jamin-influxdb
@@ -85,7 +103,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
     healthcheck:
       test: ["CMD", "influx", "ping"]
@@ -93,7 +111,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # Redis 缓存
   redis:
     image: redis:7-alpine
     container_name: jamin-redis
@@ -107,7 +124,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -115,7 +132,6 @@ services:
       timeout: 3s
       retries: 3
 
-  # ChromaDB 向量数据库
   chromadb:
     image: chromadb/chroma:0.4.15
     container_name: jamin-chromadb
@@ -133,10 +149,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
 
-  # Nginx 负载均衡
   nginx:
     image: nginx:alpine
     container_name: jamin-nginx
@@ -154,19 +169,18 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 256M
 
-  # Prometheus 监控
   prometheus:
     image: prom/prometheus:v2.45.0
     container_name: jamin-prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--storage.tsdb.retention.time=30d'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=30d"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -178,10 +192,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
 
-  # Grafana 可视化
   grafana:
     image: grafana/grafana:10.0.0
     container_name: jamin-grafana
@@ -203,16 +216,15 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
 
-  # Alertmanager 告警管理
   alertmanager:
     image: prom/alertmanager:v0.25.0
     container_name: jamin-alertmanager
     command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
@@ -221,7 +233,6 @@ services:
     networks:
       - app-network
 
-  # Node Exporter 主机监控
   node-exporter:
     image: prom/node-exporter:v1.6.0
     container_name: jamin-node-exporter
@@ -230,10 +241,10 @@ services:
       - /sys:/host/sys:ro
       - /:/rootfs:ro
     command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - "--path.procfs=/host/proc"
+      - "--path.rootfs=/rootfs"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
     ports:
       - "9100:9100"
     networks:
@@ -241,7 +252,6 @@ services:
     deploy:
       mode: global
 
-  # Cadvisor 容器监控
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.47.0
     container_name: jamin-cadvisor
@@ -262,6 +272,8 @@ services:
       mode: global
 
 volumes:
+  postgres-data:
+    driver: local
   influxdb-data:
     driver: local
   redis-data:

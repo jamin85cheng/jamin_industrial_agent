@@ -6,6 +6,8 @@ Jamin Industrial Agent - FastAPI 主应用
 职责: API服务、业务逻辑、WebSocket实时通信
 """
 
+# LEGACY ENTRYPOINT:
+# Use `python -m src.api.main` or `uvicorn src.api.main:app ...` instead.
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator

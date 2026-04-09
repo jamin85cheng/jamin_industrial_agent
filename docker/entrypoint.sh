@@ -1,5 +1,4 @@
 #!/bin/bash
-# 容器入口脚本
 
 set -e
 
@@ -8,53 +7,36 @@ echo " Jamin Industrial Agent"
 echo " Version: v1.0.0-beta2"
 echo "======================================"
 
-# 环境检查
-echo "检查环境..."
-
-# 检查必需的环境变量
-if [ -z "$INFLUXDB_TOKEN" ]; then
-    echo "警告: INFLUXDB_TOKEN 未设置"
-fi
-
-# 等待依赖服务
 wait_for_service() {
     local host=$1
     local port=$2
     local service=$3
     local timeout=${4:-60}
-    
-    echo "等待 $service ($host:$port)..."
-    
+
+    echo "Waiting for $service ($host:$port)..."
     for i in $(seq 1 $timeout); do
-        if nc -z $host $port 2>/dev/null; then
-            echo "✅ $service 已就绪"
+        if nc -z "$host" "$port" 2>/dev/null; then
+            echo "$service is ready"
             return 0
         fi
         sleep 1
     done
-    
-    echo "❌ $service 连接超时"
+
+    echo "$service connection timed out"
     return 1
 }
 
-# 根据环境类型执行不同操作
 case "${1:-production}" in
     production)
-        echo "启动生产环境..."
-        
-        # 等待数据库
+        echo "Starting production runtime..."
+        wait_for_service postgres 5432 "Postgres"
         wait_for_service influxdb 8086 "InfluxDB"
         wait_for_service redis 6379 "Redis"
-        
-        # 创建日志目录
         mkdir -p /app/logs
-        
-        # 启动应用
-        echo "启动应用..."
         exec gunicorn \
             -w ${WORKERS:-4} \
             -k uvicorn.workers.UvicornWorker \
-            --bind 0.0.0.0:8000 \
+            --bind 0.0.0.0:8600 \
             --access-logfile /app/logs/access.log \
             --error-logfile /app/logs/error.log \
             --log-level ${LOG_LEVEL:-info} \
@@ -62,44 +44,46 @@ case "${1:-production}" in
             --keep-alive 5 \
             --max-requests 1000 \
             --max-requests-jitter 100 \
-            src.main:app
+            src.api.main:app
         ;;
-    
+
     development)
-        echo "启动开发环境..."
-        
-        # 等待数据库（开发环境可选）
+        echo "Starting development runtime..."
+        wait_for_service postgres 5432 "Postgres" 10 || true
         wait_for_service influxdb 8086 "InfluxDB" 10 || true
-        
-        # 启动开发服务器
         exec python -m uvicorn \
-            src.main:app \
+            src.api.main:app \
             --host 0.0.0.0 \
-            --port 8000 \
+            --port 8600 \
             --reload \
             --log-level debug
         ;;
-    
+
     migrate)
-        echo "执行数据库迁移..."
-        python start.py --init-config
-        echo "✅ 迁移完成"
+        echo "Preparing runtime database..."
+        python scripts/manage_database.py init
+        echo "Runtime database initialization completed"
         ;;
-    
+
+    seed-demo)
+        echo "Seeding runtime database with demo data..."
+        python scripts/manage_database.py seed --include-demo-data
+        echo "Demo data seeding completed"
+        ;;
+
     test)
-        echo "运行测试..."
+        echo "Running tests..."
         exec pytest tests/ -v --tb=short
         ;;
-    
+
     shell)
-        echo "进入Shell..."
+        echo "Opening shell..."
         exec /bin/bash
         ;;
-    
+
     *)
-        echo "未知命令: $1"
-        echo "可用命令: production, development, migrate, test, shell"
+        echo "Unknown command: $1"
+        echo "Available commands: production, development, migrate, seed-demo, test, shell"
         exit 1
         ;;
 esac
-

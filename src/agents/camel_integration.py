@@ -19,6 +19,10 @@ from src.utils.structured_logging import get_logger
 logger = get_logger("camel_integration")
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class MessageType(Enum):
     TASK_ASSIGNMENT = "task_assignment"
     OPINION = "opinion"
@@ -43,7 +47,7 @@ class AgentMessage:
     message_type: MessageType
     content: str
     metadata: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -65,7 +69,7 @@ class Task:
     assigned_agents: List[str] = field(default_factory=list)
     status: str = "pending"
     result: Any = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
     completed_at: Optional[datetime] = None
     parent_task_id: Optional[str] = None
     sub_tasks: List[str] = field(default_factory=list)

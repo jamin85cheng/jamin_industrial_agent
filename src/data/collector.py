@@ -1,114 +1,115 @@
-"""
-PLC data collection module.
-
-This module keeps the original public surface area while fixing connection-state
-handling and adding compatibility aliases used by legacy entrypoints.
-"""
+"""Backward-compatible PLC collector built on the new PLC driver layer."""
 
 from __future__ import annotations
 
-import random
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from loguru import logger
+from src.plc.drivers import build_driver
+from src.plc.models import PlcDeviceConfig, PlcTagConfig, apply_scale_offset, normalize_payload_value
+from src.utils.structured_logging import get_logger
+from src.utils.thread_safe import SafeValue
 
-from src.utils.thread_safe import ConnectionGuard, SafeValue
+logger = get_logger("data.collector")
 
-try:
-    import snap7
 
-    SNAP7_AVAILABLE = True
-except ImportError:
-    SNAP7_AVAILABLE = False
-    snap7 = None
-    logger.warning("snap7 is not installed; S7 collection is unavailable")
-
-try:
-    from pymodbus.client import ModbusTcpClient
-    from pymodbus.constants import Endian
-    from pymodbus.payload import BinaryPayloadDecoder
-
-    MODBUS_AVAILABLE = True
-except ImportError:
-    MODBUS_AVAILABLE = False
-    ModbusTcpClient = None
-    Endian = None
-    BinaryPayloadDecoder = None
-    logger.warning("pymodbus is not installed; Modbus collection is unavailable")
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class PLCCollector:
-    """Collect realtime data from S7, Modbus TCP, or a simulated source."""
+    """Legacy-compatible collector facade."""
 
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.plc_type = config.get("type", "s7").lower()
-        self.scan_interval = config.get("scan_interval", 10)
-        self.tags: List[Dict[str, Any]] = self._normalize_tags(config.get("tags", []))
+        self.config = dict(config or {})
+        self.plc_type = str(self.config.get("type", "s7")).strip().lower()
+        self.scan_interval = int(self.config.get("scan_interval", 10) or 10)
         self.callbacks: List[Callable[[Dict[str, Any]], None]] = []
 
-        self._client_guard = ConnectionGuard(f"PLC-{self.plc_type}")
         self._running = SafeValue(False)
         self._thread: Optional[threading.Thread] = None
         self._reconnect_attempts = SafeValue(0)
-        self._max_reconnect_attempts = int(config.get("max_reconnect_attempts", 5))
-        self._reconnect_delay = int(config.get("reconnect_delay", 5))
+        self._max_reconnect_attempts = int(self.config.get("max_reconnect_attempts", 5) or 5)
+        self._reconnect_delay = int(self.config.get("reconnect_delay", 5) or 5)
 
+        self.device = PlcDeviceConfig(
+            device_key=str(self.config.get("device_key") or self.config.get("id") or f"PLC_{self.plc_type.upper()}"),
+            name=str(self.config.get("name") or self.config.get("device_key") or f"PLC {self.plc_type.upper()}"),
+            protocol=self.plc_type,
+            host=str(self.config.get("host", "127.0.0.1")),
+            port=int(self.config.get("port", 102 if self.plc_type == "s7" else 502)),
+            rack=int(self.config.get("rack", 0) or 0),
+            slot=int(self.config.get("slot", 1) or 1),
+            station=int(self.config.get("station", 1) or 1),
+            timeout_ms=int(self.config.get("timeout_ms", 5000) or 5000),
+            scan_interval=self.scan_interval,
+            enabled=True,
+            metadata={},
+        )
+        self.tags: List[PlcTagConfig] = self._normalize_tags(self.config.get("tags", []))
+        self.driver = build_driver(self.device)
         logger.info(f"PLCCollector initialized for type={self.plc_type}")
 
     @property
     def client(self):
-        return self._client_guard.client
+        return getattr(self.driver, "_client", self.driver)
 
     @property
     def is_connected(self) -> bool:
-        return self._client_guard.is_connected
+        return self.driver.health()
 
     @is_connected.setter
     def is_connected(self, value: bool):
         if not value:
-            self._client_guard.disconnect(self._cleanup_client)
+            self.disconnect()
 
-    def _normalize_tags(self, tags: Any) -> List[Dict[str, Any]]:
+    def _normalize_tags(self, tags: Any) -> List[PlcTagConfig]:
+        normalized: List[PlcTagConfig] = []
+        raw_items: List[Dict[str, Any]] = []
+
         if isinstance(tags, dict):
-            normalized: List[Dict[str, Any]] = []
-            for tag_id, config in tags.items():
-                if isinstance(config, dict):
-                    normalized.append(
-                        {
-                            "tag_id": tag_id,
-                            "address": config.get("plc_address")
-                            or config.get("address")
-                            or tag_id,
-                            "data_type": config.get("data_type", "FLOAT"),
-                            **config,
-                        }
-                    )
+            for tag_key, payload in tags.items():
+                if isinstance(payload, dict):
+                    raw_items.append({"tag_id": tag_key, **payload})
                 else:
-                    normalized.append(
-                        {
-                            "tag_id": tag_id,
-                            "address": config,
-                            "data_type": "FLOAT",
-                        }
-                    )
-            return normalized
-
-        if isinstance(tags, list):
-            normalized = []
-            for tag in tags:
-                if isinstance(tag, dict):
-                    normalized.append(tag)
+                    raw_items.append({"tag_id": tag_key, "address": payload})
+        elif isinstance(tags, list):
+            for item in tags:
+                if isinstance(item, dict):
+                    raw_items.append(item)
                 else:
-                    normalized.append(
-                        {"tag_id": str(tag), "address": str(tag), "data_type": "FLOAT"}
-                    )
-            return normalized
+                    raw_items.append({"tag_id": str(item), "address": str(item)})
 
-        return []
+        for item in raw_items:
+            tag_key = str(item.get("tag_id") or item.get("name") or item.get("address"))
+            description_parts = []
+            for meta_key in (
+                "value",
+                "base",
+                "amplitude",
+                "asset_id",
+                "point_key",
+                "deadband",
+                "debounce_ms",
+                "group_key",
+            ):
+                if item.get(meta_key) not in (None, ""):
+                    description_parts.append(f"{meta_key}={item.get(meta_key)}")
+            normalized.append(
+                PlcTagConfig.from_repository(
+                    self.device.device_key,
+                    {
+                        "name": tag_key,
+                        "address": item.get("plc_address") or item.get("address") or tag_key,
+                        "data_type": item.get("data_type", "FLOAT"),
+                        "unit": item.get("unit"),
+                        "description": ";".join(description_parts),
+                    },
+                )
+            )
+        return normalized
 
     def set_tags(self, tags: Any):
         self.tags = self._normalize_tags(tags)
@@ -122,164 +123,49 @@ class PLCCollector:
             self.callbacks.remove(callback)
 
     def connect(self) -> bool:
-        if self.is_connected:
-            return True
-
-        if self.plc_type == "s7":
-            return self._client_guard.connect(self._build_s7_client)
-        if self.plc_type == "modbus":
-            return self._client_guard.connect(self._build_modbus_client)
-        if self.plc_type == "simulated":
-            return self._client_guard.connect(lambda: object())
-
-        logger.error(f"Unsupported PLC type: {self.plc_type}")
-        return False
-
-    def _build_s7_client(self):
-        if not SNAP7_AVAILABLE:
-            raise RuntimeError("snap7 is not installed")
-
-        host = self.config.get("host", "192.168.1.100")
-        port = self.config.get("port", 102)
-        rack = self.config.get("rack", 0)
-        slot = self.config.get("slot", 1)
-
-        client = snap7.client.Client()
-        client.connect(host, rack, slot, port)
-        if not client.is_connected():
-            raise RuntimeError(f"Failed to connect to S7 PLC at {host}:{port}")
-        return client
-
-    def _build_modbus_client(self):
-        if not MODBUS_AVAILABLE:
-            raise RuntimeError("pymodbus is not installed")
-
-        host = self.config.get("host", "192.168.1.101")
-        port = self.config.get("port", 502)
-        client = ModbusTcpClient(host, port=port)
-        if not client.connect():
-            raise RuntimeError(f"Failed to connect to Modbus device at {host}:{port}")
-        return client
-
-    def _cleanup_client(self, client):
         try:
-            if self.plc_type == "s7" and hasattr(client, "disconnect"):
-                client.disconnect()
-            elif self.plc_type == "modbus" and hasattr(client, "close"):
-                client.close()
+            self.driver.connect()
+            return True
         except Exception as exc:
-            logger.warning(f"Failed to cleanly disconnect PLC client: {exc}")
+            logger.warning(f"Failed to connect PLCCollector: {exc}")
+            return False
 
     def disconnect(self):
         self._running.set(False)
-        self._client_guard.disconnect(self._cleanup_client)
+        try:
+            self.driver.close()
+        except Exception as exc:
+            logger.warning(f"Failed to disconnect PLCCollector: {exc}")
 
     def read_tag(self, tag_config: Dict[str, Any]) -> Optional[Any]:
-        if not self.is_connected and not self.connect():
-            logger.warning("PLC is not connected")
+        tag = self._normalize_tags([tag_config])
+        if not tag:
             return None
-
-        address = tag_config.get("address", "")
-        data_type = str(tag_config.get("data_type", "FLOAT")).upper()
-
         try:
-            if self.plc_type == "s7":
-                return self._read_s7_tag(address, data_type)
-            if self.plc_type == "modbus":
-                return self._read_modbus_tag(address, data_type)
-            if self.plc_type == "simulated":
-                return self._read_simulated_tag(tag_config, data_type)
+            item = self.driver.read_batch(tag)[0]
+            return apply_scale_offset(normalize_payload_value(item.value, tag[0]), tag[0])
         except Exception as exc:
-            logger.error(f"Failed to read tag {address}: {exc}")
-
-        return None
-
-    def _read_s7_tag(self, address: str, data_type: str) -> Optional[Any]:
-        client = self.client
-        if client is None:
+            logger.warning(f"Failed to read tag {tag[0].address}: {exc}")
             return None
-
-        if address.startswith("DB"):
-            parts = address.split(".")
-            db_number = int(parts[0][2:])
-            offset = int(parts[1][3:]) if len(parts) > 1 and "D" in parts[1] else 0
-
-            if data_type == "FLOAT":
-                data = client.db_read(db_number, offset, 4)
-                return int.from_bytes(data, byteorder="big", signed=False)
-            if data_type == "INT":
-                data = client.db_read(db_number, offset, 2)
-                return int.from_bytes(data, byteorder="big", signed=True)
-            if data_type == "BOOL":
-                data = client.db_read(db_number, offset, 1)
-                return bool(data[0] & 1)
-
-        if address.startswith("M"):
-            offset = int("".join(ch for ch in address if ch.isdigit()) or "0")
-            size = 2 if data_type == "INT" else 4
-            data = client.read_area(snap7.types.Areas.MK, 0, offset, size)
-            if data_type == "BOOL":
-                return bool(data[0] & 1)
-            return int.from_bytes(data, byteorder="big", signed=data_type == "INT")
-
-        logger.warning(f"Unsupported S7 address format: {address}")
-        return None
-
-    def _read_modbus_tag(self, address: str, data_type: str) -> Optional[Any]:
-        client = self.client
-        if client is None:
-            return None
-
-        register_address = max(int(address) - 40001, 0)
-
-        if data_type == "FLOAT":
-            result = client.read_holding_registers(register_address, 2, slave=1)
-            if result.isError():
-                return None
-            decoder = BinaryPayloadDecoder.fromRegisters(
-                result.registers,
-                byteorder=Endian.Big,
-                wordorder=Endian.Big,
-            )
-            return decoder.decode_32bit_float()
-
-        if data_type == "INT":
-            result = client.read_holding_registers(register_address, 1, slave=1)
-            if result.isError():
-                return None
-            return result.registers[0]
-
-        if data_type == "BOOL":
-            result = client.read_coils(register_address, 1, slave=1)
-            if result.isError():
-                return None
-            return result.bits[0]
-
-        logger.warning(f"Unsupported Modbus data type: {data_type}")
-        return None
-
-    def _read_simulated_tag(self, tag_config: Dict[str, Any], data_type: str) -> Any:
-        if "value" in tag_config:
-            return tag_config["value"]
-        if data_type == "BOOL":
-            return random.choice([True, False])
-        if data_type == "INT":
-            return random.randint(0, 100)
-        return round(random.uniform(0, 100), 2)
 
     def read_all_tags(self) -> Dict[str, Any]:
-        values: Dict[str, Any] = {}
-        for tag in self.tags:
-            tag_id = tag.get("tag_id") or tag.get("address")
-            value = self.read_tag(tag)
-            values[tag_id] = {
-                "value": value,
-                "timestamp": datetime.now().isoformat(),
-                "quality": "good" if value is not None else "bad",
-            }
+        try:
+            items = self.driver.read_batch(self.tags)
+        except Exception as exc:
+            logger.warning(f"Failed to read all tags: {exc}")
+            items = []
 
+        values: Dict[str, Any] = {}
+        for item in items:
+            tag = next((candidate for candidate in self.tags if candidate.tag_key == item.tag_key), None)
+            normalized_value = item.value if tag is None else apply_scale_offset(normalize_payload_value(item.value, tag), tag)
+            values[item.tag_key] = {
+                "value": normalized_value,
+                "timestamp": datetime.fromtimestamp(item.ts_ms / 1000.0, tz=timezone.utc).isoformat(),
+                "quality": item.quality.lower(),
+            }
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "values": values,
         }
 
@@ -359,24 +245,3 @@ class PLCCollector:
         self.disconnect()
         time.sleep(1)
         return self.connect()
-
-
-if __name__ == "__main__":
-    sample_config = {
-        "type": "simulated",
-        "scan_interval": 2,
-        "tags": [
-            {"tag_id": "TAG_DO_001", "address": "MW100", "data_type": "FLOAT"},
-            {"tag_id": "TAG_PH_001", "address": "MW104", "data_type": "FLOAT"},
-            {"tag_id": "TAG_PUMP_001", "address": "Q0.0", "data_type": "BOOL"},
-        ],
-    }
-
-    collector = PLCCollector(sample_config)
-
-    def on_data_received(data: Dict[str, Any]):
-        print(data)
-
-    collector.start_continuous_collection(on_data_received)
-    time.sleep(5)
-    collector.stop_collection()

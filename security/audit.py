@@ -8,12 +8,16 @@
 import json
 import hashlib
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from enum import Enum
 from pathlib import Path
 import sqlite3
 from loguru import logger
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class AuditLevel(Enum):
@@ -74,7 +78,7 @@ class AuditRecord:
         result: str = "success"
     ):
         self.id = self._generate_id()
-        self.timestamp = datetime.utcnow()
+        self.timestamp = utc_now()
         self.action = action
         self.user_id = user_id
         self.user_name = user_name
@@ -88,7 +92,7 @@ class AuditRecord:
     
     def _generate_id(self) -> str:
         """生成唯一ID"""
-        data = f"{datetime.utcnow().isoformat()}"
+        data = f"{utc_now().isoformat()}"
         return hashlib.sha256(data.encode()).hexdigest()[:16]
     
     def to_dict(self) -> Dict[str, Any]:

@@ -7,6 +7,7 @@ import {
   diagnosisV2Api,
   devicesApi,
   extractApiError,
+  reportsApi,
   type AgentCatalogItem,
   type DiagnosisAnalyzeResponseV2,
   type DiagnosisExpertOpinion,
@@ -66,6 +67,8 @@ const LONG_TASK_POLL_INTERVAL_MS = 5000
 const LONG_TASK_POLL_MAX_ATTEMPTS = 900
 const LONG_TASK_POLL_WINDOW_MINUTES = Math.round((LONG_TASK_POLL_INTERVAL_MS * LONG_TASK_POLL_MAX_ATTEMPTS) / 60000)
 
+const isCancelledTaskMessage = (messageText: string) => /cancelled|cancellation|取消/i.test(messageText)
+
 const stageLabel = (value?: string) => {
   const labels: Record<string, string> = {
     queued: '排队中',
@@ -110,7 +113,7 @@ const Diagnosis: React.FC = () => {
   const tasksQuery = useQuery({
     queryKey: ['diagnosis-v2', 'tasks', currentTask?.task_id ?? 'idle'],
     queryFn: () => diagnosisV2Api.listTasks(10),
-    refetchInterval: currentTask && ['pending', 'running'].includes(currentTask.workflow?.status || currentTask.status) ? 15000 : false,
+    refetchInterval: currentTask && ['queued', 'pending', 'running'].includes(currentTask.workflow?.status || currentTask.status) ? 15000 : false,
   })
 
   const runtimeCards = useMemo(() => {
@@ -150,6 +153,7 @@ const Diagnosis: React.FC = () => {
   const exportReport = async (taskId: string, format: 'html' | 'pdf' | 'markdown' | 'json') => {
     try {
       const response = await diagnosisV2Api.exportReport(taskId, format)
+      await reportsApi.download(response.report_id, response.filename)
       message.success(`报告已生成：${response.filename}`)
     } catch (error) {
       message.error(extractApiError(error, '报告导出失败'))
@@ -263,6 +267,38 @@ const Diagnosis: React.FC = () => {
       })
     })
 
+  const handleTaskSubmissionSuccess = async (
+    response: DiagnosisAnalyzeResponseV2,
+    messages: { loading: string; success: string },
+  ) => {
+    setLatestCamel(null)
+    setLatestResult(null)
+    if (response.status === 'processing' && response.task_id) {
+      setCurrentTask({
+        task_id: response.task_id,
+        status: 'queued',
+        progress: { current_action: response.message, percentage: 0 },
+      })
+      message.loading({ content: messages.loading, key: 'diagnosis-poll' })
+      try {
+        await trackTaskWithRealtime(response.task_id)
+        message.success({ content: messages.success, key: 'diagnosis-poll' })
+      } catch (error) {
+        const errorMessage = extractApiError(error, '任务追踪失败')
+        if (isCancelledTaskMessage(errorMessage)) {
+          message.info({ content: 'Task cancelled', key: 'diagnosis-poll' })
+        } else {
+          message.error({ content: errorMessage, key: 'diagnosis-poll' })
+        }
+      }
+      return
+    }
+    setLatestResult(response.result ?? null)
+    setCurrentTask(null)
+    setTaskMessage(undefined)
+    message.success(messages.success)
+  }
+
   const diagnoseMutation = useMutation({
     mutationFn: diagnosisV2Api.analyze,
     onSuccess: async (response: DiagnosisAnalyzeResponseV2) => {
@@ -271,7 +307,7 @@ const Diagnosis: React.FC = () => {
       if (response.status === 'processing' && response.task_id) {
         setCurrentTask({
           task_id: response.task_id,
-          status: 'pending',
+          status: 'queued',
           progress: { current_action: response.message, percentage: 0 },
         })
         message.loading({ content: `任务已启动，最长追踪窗口约 ${LONG_TASK_POLL_WINDOW_MINUTES} 分钟...`, key: 'diagnosis-poll' })
@@ -289,6 +325,38 @@ const Diagnosis: React.FC = () => {
       message.success('诊断完成')
     },
     onError: (error) => message.error(extractApiError(error, '诊断请求失败')),
+  })
+
+  const retryMutation = useMutation({
+    mutationFn: diagnosisV2Api.retryTask,
+    onSuccess: async (response: DiagnosisAnalyzeResponseV2) =>
+      handleTaskSubmissionSuccess(response, {
+        loading: `Retry started. Long-task window is about ${LONG_TASK_POLL_WINDOW_MINUTES} minutes...`,
+        success: 'Task retry completed',
+      }),
+    onError: (error) => message.error(extractApiError(error, 'Task retry failed')),
+  })
+
+  const resumeMutation = useMutation({
+    mutationFn: diagnosisV2Api.resumeTask,
+    onSuccess: async (response: DiagnosisAnalyzeResponseV2) =>
+      handleTaskSubmissionSuccess(response, {
+        loading: `Recovered task resumed. Long-task window is about ${LONG_TASK_POLL_WINDOW_MINUTES} minutes...`,
+        success: 'Recovered task resumed',
+      }),
+    onError: (error) => message.error(extractApiError(error, 'Task resume failed')),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: ({ taskId, reason }: { taskId: string; reason?: string }) =>
+      diagnosisV2Api.cancelTask(taskId, reason),
+    onSuccess: (task) => {
+      stopTaskStreaming()
+      setCurrentTask(task)
+      setTaskMessage(task.error || 'Task cancelled')
+      message.info('Task cancelled')
+    },
+    onError: (error) => message.error(extractApiError(error, 'Task cancel failed')),
   })
 
   const handleDiagnose = () => {
@@ -323,8 +391,28 @@ const Diagnosis: React.FC = () => {
       message.info(`已接管任务 ${taskId}`)
       await trackTaskWithRealtime(taskId)
     } catch (error) {
-      message.error(extractApiError(error, '接管任务失败'))
+      const errorMessage = extractApiError(error, 'Task attach failed')
+      if (isCancelledTaskMessage(errorMessage)) {
+        message.info('Task cancelled')
+      } else {
+        message.error(errorMessage)
+      }
     }
+  }
+
+  const handleRetryTask = (taskId: string) => {
+    retryMutation.mutate(taskId)
+  }
+
+  const handleResumeTask = (taskId: string) => {
+    resumeMutation.mutate(taskId)
+  }
+
+  const handleCancelTask = (taskId: string) => {
+    cancelMutation.mutate({
+      taskId,
+      reason: 'Cancelled from diagnosis console',
+    })
   }
 
   useEffect(() => {
@@ -353,6 +441,33 @@ const Diagnosis: React.FC = () => {
       </div>
 
       <TaskStatusHeader currentTask={currentTask} taskMessage={taskMessage} latestResult={latestResult} latestCamel={latestCamel} />
+
+      {currentTask?.task_id ? (
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button
+            disabled={!currentTask.controls?.resumable}
+            loading={resumeMutation.isPending}
+            onClick={() => handleResumeTask(currentTask.task_id)}
+          >
+            Resume Current Task
+          </Button>
+          <Button
+            danger
+            disabled={!currentTask.controls?.cancellable}
+            loading={cancelMutation.isPending}
+            onClick={() => handleCancelTask(currentTask.task_id)}
+          >
+            Cancel Current Task
+          </Button>
+          <Button
+            disabled={!currentTask.controls?.retryable}
+            loading={retryMutation.isPending}
+            onClick={() => handleRetryTask(currentTask.task_id)}
+          >
+            Retry Current Task
+          </Button>
+        </Space>
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={8}>
@@ -419,6 +534,9 @@ const Diagnosis: React.FC = () => {
             tasks={tasksQuery.data?.tasks ?? []}
             loading={tasksQuery.isLoading}
             onAttach={(taskId) => void handleAttachTask(taskId)}
+            onResume={handleResumeTask}
+            onRetry={handleRetryTask}
+            onCancel={handleCancelTask}
             onExport={(taskId, format) => void exportReport(taskId, format)}
           />
         </Col>

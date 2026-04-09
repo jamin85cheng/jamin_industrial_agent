@@ -105,9 +105,13 @@ class RuleParser:
     
     def _compile_threshold(self, condition: Dict[str, Any]) -> Callable:
         """编译阈值条件"""
-        metric = condition['metric']
+        metric = condition.get('metric') or condition.get('tag')
         operator = condition['operator']
-        threshold = condition['threshold']
+        threshold = condition.get('threshold', condition.get('value'))
+
+        if metric is None or threshold is None:
+            logger.error("threshold condition requires metric/tag and threshold/value")
+            return lambda data: False
         
         op_func = self.operators.get(operator)
         if not op_func:
@@ -152,16 +156,22 @@ class RuleParser:
     def _compile_rate_of_change(self, condition: Dict[str, Any]) -> Callable:
         """编译变化率条件"""
         metric = condition['metric']
-        change_threshold = condition['change_threshold']
+        change_threshold = condition.get('change_threshold', condition.get('min_change'))
         window_minutes = condition.get('window_minutes', 5)
+
+        if change_threshold is None:
+            logger.error("rate_of_change condition requires change_threshold or min_change")
+            return lambda data: False
         
         def check(data: Dict[str, Any]) -> bool:
             history = data.get('_history', {}).get(metric, [])
             
-            if len(history) < 2:
+            if len(history) < 1:
                 return False
             
-            current_value = history[-1]
+            current_value = self._get_metric_value(data, metric)
+            if current_value is None:
+                current_value = history[-1]
             past_value = history[-min(window_minutes, len(history))]
             
             change = abs(current_value - past_value)
@@ -172,7 +182,7 @@ class RuleParser:
     def _compile_logic(self, condition: Dict[str, Any]) -> Callable:
         """编译逻辑组合条件"""
         sub_conditions = condition.get('conditions', [])
-        logic = condition.get('logic', 'AND')
+        logic = str(condition.get('logic', condition.get('operator', 'AND'))).upper()
         
         compiled_checks = []
         for sub_cond in sub_conditions:

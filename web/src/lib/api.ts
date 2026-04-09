@@ -18,13 +18,117 @@ export interface LoginPayload {
 
 interface LoginResponse {
   access_token: string
+  refresh_token: string
   token_type: string
   expires_in: number
+  refresh_expires_in: number
   user: {
     user_id: string
     username: string
     roles: string[]
   }
+}
+
+interface RefreshSessionPayload {
+  refresh_token: string
+}
+
+export interface AuthManagedUserRecord {
+  user_id: string
+  username: string
+  roles: string[]
+  permissions: string[]
+  tenant_id: string
+  is_active: boolean
+  is_demo: boolean
+  created_at?: string | null
+  updated_at?: string | null
+  last_login_at?: string | null
+}
+
+export interface AuthManagedUserListResponse {
+  total: number
+  users: AuthManagedUserRecord[]
+}
+
+export interface AuthCreateUserPayload {
+  user_id?: string
+  username: string
+  password: string
+  roles?: string[]
+  permissions?: string[]
+  tenant_id?: string
+  is_active?: boolean
+  is_demo?: boolean
+}
+
+export interface AuthUpdateUserPayload {
+  username?: string
+  roles?: string[]
+  permissions?: string[]
+  tenant_id?: string
+  is_active?: boolean
+  is_demo?: boolean
+}
+
+export interface AuthTenantRecord {
+  id: string
+  name: string
+  status: 'active' | 'suspended' | 'pending' | 'expired'
+  created_at?: string | null
+  settings: Record<string, unknown>
+}
+
+export interface AuthTenantListResponse {
+  total: number
+  tenants: AuthTenantRecord[]
+}
+
+export interface AuthRoleRecord {
+  id: string
+  name: string
+  description: string
+  permissions: string[]
+  is_system: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface AuthRoleListResponse {
+  total: number
+  roles: AuthRoleRecord[]
+}
+
+export interface AuthCreateTenantPayload {
+  id: string
+  name: string
+  status?: 'active' | 'suspended' | 'pending' | 'expired'
+  settings?: Record<string, unknown>
+}
+
+export interface AuthUpdateTenantPayload {
+  name?: string
+  status?: 'active' | 'suspended' | 'pending' | 'expired'
+  settings?: Record<string, unknown>
+}
+
+export interface AuthSessionRecord {
+  token_id: string
+  user_id: string
+  username: string
+  tenant_id: string
+  created_at?: string | null
+  expires_at?: string | null
+  last_used_at?: string | null
+  revoked_at?: string | null
+  replaced_by_token_id?: string | null
+  user_is_active: boolean
+  status: 'active' | 'revoked' | 'expired'
+}
+
+export interface AuthSessionListResponse {
+  total: number
+  sessions: AuthSessionRecord[]
 }
 
 export interface AlertRecord {
@@ -42,6 +146,12 @@ export interface AlertRecord {
   acknowledged_by?: string | null
   acknowledged_at?: string | null
   resolved_at?: string | null
+  diagnosis_task_id?: string | null
+  latest_report_id?: string | null
+  latest_report_download_url?: string | null
+  last_action_by?: string | null
+  last_action_at?: string | null
+  resolution_notes?: string | null
 }
 
 export interface AlertStats {
@@ -75,12 +185,116 @@ export interface DeviceRecord {
   type: string
   host: string
   port: number
+  rack?: number
+  slot?: number
+  scan_interval: number
+  enabled: boolean
   status: 'online' | 'offline' | 'error'
   last_seen?: string | null
   tag_count: number
   created_at: string
   updated_at: string
   tenant_id?: string | null
+}
+
+export interface DeviceTagRecord {
+  name: string
+  address: string
+  data_type: string
+  unit?: string | null
+  description?: string | null
+  asset_id?: string | null
+  point_key?: string | null
+  deadband?: number | null
+  debounce_ms: number
+}
+
+export interface DeviceTagImportPreviewResponse {
+  file_name: string
+  file_type: string
+  detected_columns: string[]
+  matched_columns: Record<string, string>
+  field_mapping: Record<string, string>
+  unmatched_columns: string[]
+  available_fields: string[]
+  required_fields: string[]
+  total_rows: number
+  parsed_rows: number
+  skipped_rows: number
+  warnings: string[]
+  tags: DeviceTagRecord[]
+  preview_rows: DeviceTagPreviewRow[]
+  validation_report: DeviceTagValidationSummary
+}
+
+export interface DeviceTagValidationIssue {
+  code: string
+  field?: string | null
+  message: string
+  severity: 'error' | 'warning' | string
+}
+
+export interface DeviceTagRepairSuggestion {
+  field: string
+  value: string
+  confidence: 'low' | 'medium' | 'high' | string
+  reason: string
+}
+
+export interface DeviceTagPreviewRow {
+  row_number: number
+  status: 'ok' | 'warning' | 'error' | string
+  flagged_fields: string[]
+  issues: DeviceTagValidationIssue[]
+  suggestions: DeviceTagRepairSuggestion[]
+  tag: DeviceTagRecord
+}
+
+export interface DeviceTagDuplicateCluster {
+  cluster_key: string
+  label: string
+  addresses: string[]
+  row_numbers: number[]
+  duplicate_count: number
+  suggestion: string
+}
+
+export interface DeviceTagValidationSummary {
+  total_rows: number
+  clean_rows: number
+  rows_with_errors: number
+  rows_with_warnings: number
+  error_count: number
+  warning_count: number
+  issue_counts: Record<string, number>
+  suggestion_count: number
+  duplicate_clusters: DeviceTagDuplicateCluster[]
+  has_errors: boolean
+}
+
+export interface DeviceTagPreviewOverridePayload {
+  [rowNumber: string]: Record<string, string | number | null | undefined>
+}
+
+export interface DeviceCreatePayload {
+  name: string
+  type: 's7' | 'modbus' | 'simulated'
+  host: string
+  port: number
+  rack?: number
+  slot?: number
+  scan_interval?: number
+  tags?: DeviceTagRecord[]
+}
+
+export interface DeviceUpdatePayload {
+  name?: string
+  host?: string
+  port?: number
+  rack?: number
+  slot?: number
+  scan_interval?: number
+  enabled?: boolean
 }
 
 export interface DiagnoseResponse {
@@ -242,6 +456,10 @@ export interface DiagnosisTaskResponseV2 {
     restored_from_persistence?: boolean
     interrupted_by_restart?: boolean
     resume_supported?: boolean
+    resume_required?: boolean
+    resume_count?: number
+    last_resumed_at?: string | null
+    last_resumed_by?: string | null
   }
   workflow?: {
     status?: string
@@ -249,6 +467,17 @@ export interface DiagnosisTaskResponseV2 {
     current_round?: number
     round_summaries?: Array<Record<string, unknown>>
     degraded_mode?: boolean
+  }
+  controls?: {
+    cancellable?: boolean
+    retryable?: boolean
+    resumable?: boolean
+    cancel_requested_at?: string | null
+    cancelled_by?: string | null
+    cancellation_reason?: string | null
+    retry_count?: number
+    retry_of_task_id?: string | null
+    resume_count?: number
   }
   metadata?: {
     diagnosis_mode?: string
@@ -268,10 +497,59 @@ export interface DiagnosisTaskResponseV2 {
 export interface DiagnosisReportExportResponse {
   task_id: string
   format: 'html' | 'pdf' | 'markdown' | 'json'
-  path: string
   filename: string
   report_id: string
   generated_at: string
+  download_url: string
+  media_type: string
+  alert_id?: string | null
+}
+
+export interface ReportRecord {
+  report_id: string
+  task_id: string
+  diagnosis_id: string
+  alert_id?: string | null
+  tenant_id: string
+  format: 'html' | 'pdf' | 'markdown' | 'json' | string
+  filename: string
+  media_type: string
+  created_at: string
+  created_by?: string | null
+  file_size_bytes?: number | null
+  metadata: Record<string, unknown>
+  download_url: string
+}
+
+export interface ReportListResponse {
+  total: number
+  reports: ReportRecord[]
+}
+
+export interface SystemConfigPayload {
+  basic: {
+    system_name: string
+    scan_interval: number
+    alert_suppression: number
+  }
+  plc: {
+    plc_type: string
+    ip_address: string
+    port: number
+  }
+  notifications: {
+    feishu_enabled: boolean
+    feishu_webhook?: string | null
+    email_enabled: boolean
+    smtp_server?: string | null
+  }
+}
+
+export interface SystemConfigResponse {
+  config: SystemConfigPayload
+  updated_at?: string | null
+  updated_by?: string | null
+  source: 'defaults' | 'database' | string
 }
 
 export interface DiagnosisTaskListResponseV2 {
@@ -330,6 +608,9 @@ export interface DiagnosisRuntimeDebugResponse {
     configured_route_keys?: string[]
     endpoint_keys?: string[]
     task_tracking_backend?: string
+    diagnosis_execution_backend?: string
+    diagnosis_execution_asyncio_workers?: number
+    diagnosis_execution_auto_resume_recovered?: boolean
     postgres_enabled?: boolean
     postgres_database?: string
     postgres_schema?: string
@@ -343,6 +624,32 @@ export interface DiagnosisRuntimeDebugResponse {
       persistence_path?: string
       active_tasks?: number
       running_tasks?: number
+      total_queued?: number
+    }
+    diagnosis_executor?: {
+      backend?: string
+      requested_backend?: string
+      durable?: boolean
+      process_isolated?: boolean
+      requires_worker?: boolean
+      resolution_note?: string | null
+      queue_depth?: number
+      worker_count?: number
+      max_workers?: number
+      uses_fastapi_background_tasks?: boolean
+    }
+    diagnosis_runtime_bootstrap?: {
+      bootstrapped_at?: string | null
+      auto_resume_enabled?: boolean
+      auto_resumed_task_ids?: string[]
+      auto_resume_skipped_reason?: string | null
+      executor?: {
+        backend?: string
+        requested_backend?: string
+        durable?: boolean
+        process_isolated?: boolean
+        requires_worker?: boolean
+      }
     }
     metadata_database?: {
       backend?: string
@@ -350,6 +657,223 @@ export interface DiagnosisRuntimeDebugResponse {
     }
     [key: string]: unknown
   }
+}
+
+export interface IntelligenceCatalogPlant {
+  plant_id: string
+  name: string
+  description?: string
+}
+
+export interface IntelligenceCatalogArea {
+  area_id: string
+  plant_id: string
+  name: string
+  description?: string
+}
+
+export interface IntelligenceCatalogLine {
+  line_id: string
+  area_id: string
+  name: string
+  description?: string
+}
+
+export interface IntelligencePointDefinition {
+  point_id: string
+  display_name: string
+  unit: string
+  point_type: string
+  required: boolean
+  low_limit?: number | null
+  high_limit?: number | null
+  description?: string
+}
+
+export interface IntelligenceAssetDefinition {
+  asset_id: string
+  line_id: string
+  area_id: string
+  plant_id: string
+  scene_type: string
+  name: string
+  description?: string
+  points: IntelligencePointDefinition[]
+}
+
+export interface IntelligenceAssetCatalogResponse {
+  plants: IntelligenceCatalogPlant[]
+  areas: IntelligenceCatalogArea[]
+  lines: IntelligenceCatalogLine[]
+  assets: IntelligenceAssetDefinition[]
+}
+
+export interface IntelligenceRuntimeSummary {
+  default_scene: string
+  patrol_interval_seconds: number
+  assets: number
+  latest_run_id?: string | null
+  pending_review_count: number
+  confirmed_label_count: number
+  knowledge_case_count: number
+  candidate_count: number
+}
+
+export interface IntelligenceSchedulerSummary {
+  running: boolean
+  interval_seconds?: number | null
+  last_run_id?: string | null
+  last_error?: string | null
+}
+
+export interface IntelligenceRuntimeResponse {
+  service: IntelligenceRuntimeSummary
+  scheduler: IntelligenceSchedulerSummary
+}
+
+export interface IntelligenceSnapshotPoint {
+  point_id: string
+  display_name: string
+  value: string | number | boolean
+  unit?: string
+  quality: string
+  timestamp: string
+  history?: number[]
+  point_type?: string
+}
+
+export interface IntelligenceSnapshot {
+  snapshot_id: string
+  asset_id: string
+  asset_name?: string
+  scene_type: string
+  collected_at: string
+  source: string
+  completeness: number
+  points: Record<string, IntelligenceSnapshotPoint>
+}
+
+export interface IntelligencePatrolFinding {
+  code: string
+  severity: string
+  title: string
+  description: string
+  affected_points: string[]
+  evidence: Record<string, unknown>
+}
+
+export interface IntelligencePredictionWindow {
+  horizon_minutes: number
+  risk_score: number
+  summary: string
+  fault_probabilities: Record<string, number>
+}
+
+export interface IntelligenceKnowledgeCase {
+  case_id: string
+  asset_id?: string | null
+  scene_type: string
+  title: string
+  summary: string
+  content: string
+  tags: string[]
+  root_cause?: string | null
+  recommended_actions: string[]
+  source_label_id?: string | null
+  source_type: string
+  usage_count: number
+  created_at?: string | null
+  updated_at?: string | null
+  score?: number
+}
+
+export interface IntelligenceAssetAssessment {
+  asset_id: string
+  asset_name: string
+  scene_type: string
+  status: string
+  risk_score: number
+  risk_level: string
+  suspected_faults: string[]
+  affected_points: string[]
+  operator_actions: string[]
+  requires_review: boolean
+  summary: string
+  findings: IntelligencePatrolFinding[]
+  knowledge_hits: IntelligenceKnowledgeCase[]
+  knowledge_grounding_ratio: number
+  prediction_window: IntelligencePredictionWindow[]
+  snapshot_id?: string | null
+  review_label_id?: string | null
+}
+
+export interface IntelligenceLabelRecord {
+  label_id: string
+  run_id: string
+  asset_id: string
+  asset_name?: string
+  scene_type: string
+  status: string
+  anomaly_type?: string | null
+  root_cause?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  review: Record<string, unknown>
+  current_assessment?: IntelligenceAssetAssessment
+}
+
+export interface IntelligenceReviewResult {
+  label: IntelligenceLabelRecord
+  knowledge_case?: IntelligenceKnowledgeCase | null
+}
+
+export interface IntelligencePatrolRun {
+  run_id: string
+  task_id?: string
+  scene_type: string
+  status: string
+  risk_level: string
+  risk_score: number
+  created_at: string
+  triggered_by: string
+  schedule_type: string
+  asset_results: IntelligenceAssetAssessment[]
+  review_queue_size: number
+  abnormal_asset_count: number
+  healthy_asset_count: number
+  labels_created?: IntelligenceLabelRecord[]
+}
+
+export interface IntelligenceLatestRiskResponse {
+  run_id?: string | null
+  risk_level?: string | null
+  risk_score?: number | null
+  asset_results: IntelligenceAssetAssessment[]
+}
+
+export interface IntelligenceLearningCandidate {
+  candidate_id: string
+  candidate_type: string
+  name: string
+  status: string
+  score: number
+  rationale: string
+  payload: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface IntelligenceTelemetryPointInput {
+  value: string | number | boolean
+  unit?: string
+  quality?: string
+  timestamp?: string
+}
+
+export interface IntelligenceDemoSeedResponse {
+  profile: 'normal' | 'warning' | 'critical'
+  snapshot: IntelligenceSnapshot
+  patrol_run?: IntelligencePatrolRun | null
 }
 
 const DEFAULT_API_TIMEOUT_MS = 15_000
@@ -362,6 +886,13 @@ const api = axios.create({
   timeout: DEFAULT_API_TIMEOUT_MS,
 })
 
+const authSessionClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  timeout: DEFAULT_API_TIMEOUT_MS,
+})
+
+let refreshPromise: Promise<string | null> | null = null
+
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {
@@ -372,13 +903,65 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error?.config
+    const requestUrl = String(originalRequest?.url ?? '')
+    const isAuthSessionRequest =
+      requestUrl.includes('/auth/login') ||
+      requestUrl.includes('/auth/refresh') ||
+      requestUrl.includes('/auth/logout')
+
+    if (error?.response?.status === 401 && originalRequest && !originalRequest.__retry && !isAuthSessionRequest) {
+      if (!refreshPromise) {
+        refreshPromise = refreshAccessToken().finally(() => {
+          refreshPromise = null
+        })
+      }
+
+      const nextToken = await refreshPromise
+      if (nextToken) {
+        originalRequest.__retry = true
+        originalRequest.headers = {
+          ...(originalRequest.headers ?? {}),
+          Authorization: `Bearer ${nextToken}`,
+        }
+        return api(originalRequest)
+      }
+    }
+
     if (error?.response?.status === 401) {
       useAuthStore.getState().logout()
     }
     return Promise.reject(error)
   }
 )
+
+const refreshAccessToken = async (): Promise<string | null> => {
+  const { refreshToken, updateTokens, updateUser, logout } = useAuthStore.getState()
+  if (!refreshToken) {
+    logout()
+    return null
+  }
+
+  try {
+    const { data } = await authSessionClient.post<LoginResponse>('/auth/refresh', {
+      refresh_token: refreshToken,
+    } as RefreshSessionPayload)
+    updateTokens(
+      data.access_token,
+      data.refresh_token,
+      data.expires_in,
+      data.refresh_expires_in,
+    )
+    updateUser({
+      ...buildUser(data.user),
+    })
+    return data.access_token
+  } catch {
+    logout()
+    return null
+  }
+}
 
 const buildUser = (user: LoginResponse['user']): ApiUser => ({
   user_id: user.user_id,
@@ -395,6 +978,21 @@ const resolveApiUrl = (path: string) => {
     return `${normalizedBase}${normalizedPath}`
   }
   return new URL(`${normalizedBase}${normalizedPath}`, window.location.origin).toString()
+}
+
+const downloadFileFromApi = async (path: string, filename: string) => {
+  const { data } = await api.get<Blob>(path, {
+    responseType: 'blob',
+    timeout: DIAGNOSIS_TASK_TIMEOUT_MS,
+  })
+  const blobUrl = window.URL.createObjectURL(data)
+  const anchor = document.createElement('a')
+  anchor.href = blobUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(blobUrl)
 }
 
 export const extractApiError = (error: unknown, fallback = '请求失败，请稍后重试') => {
@@ -421,8 +1019,94 @@ export const authApi = {
     const { data } = await api.post<LoginResponse>('/auth/login', payload)
     return {
       token: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in,
+      refreshExpiresIn: data.refresh_expires_in,
       user: buildUser(data.user),
     }
+  },
+  async refresh(payload: RefreshSessionPayload) {
+    const { data } = await authSessionClient.post<LoginResponse>('/auth/refresh', payload)
+    return data
+  },
+  async logout(refreshToken?: string | null) {
+    if (!refreshToken) {
+      return { success: true }
+    }
+    const { data } = await authSessionClient.post<{ success: boolean }>('/auth/logout', {
+      refresh_token: refreshToken,
+    } as RefreshSessionPayload)
+    return data
+  },
+  async me() {
+    const { data } = await api.get<ApiUser>('/auth/me')
+    return data
+  },
+  async listUsers(params?: { tenant_id?: string; include_inactive?: boolean }) {
+    const query = new URLSearchParams()
+    if (params?.tenant_id) {
+      query.set('tenant_id', params.tenant_id)
+    }
+    if (params?.include_inactive !== undefined) {
+      query.set('include_inactive', String(params.include_inactive))
+    }
+    const suffix = query.toString()
+    const { data } = await api.get<AuthManagedUserListResponse>(`/auth/users${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async listRoles() {
+    const { data } = await api.get<AuthRoleListResponse>('/auth/roles')
+    return data
+  },
+  async createUser(payload: AuthCreateUserPayload) {
+    const { data } = await api.post<AuthManagedUserRecord>('/auth/users', payload)
+    return data
+  },
+  async updateUser(userId: string, payload: AuthUpdateUserPayload) {
+    const { data } = await api.patch<AuthManagedUserRecord>(`/auth/users/${userId}`, payload)
+    return data
+  },
+  async listTenants() {
+    const { data } = await api.get<AuthTenantListResponse>('/auth/tenants')
+    return data
+  },
+  async listSessions(params?: { tenant_id?: string; user_id?: string; include_revoked?: boolean }) {
+    const query = new URLSearchParams()
+    if (params?.tenant_id) {
+      query.set('tenant_id', params.tenant_id)
+    }
+    if (params?.user_id) {
+      query.set('user_id', params.user_id)
+    }
+    if (params?.include_revoked !== undefined) {
+      query.set('include_revoked', String(params.include_revoked))
+    }
+    const suffix = query.toString()
+    const { data } = await api.get<AuthSessionListResponse>(`/auth/sessions${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async revokeSession(tokenId: string) {
+    const { data } = await api.post<AuthSessionRecord>(`/auth/sessions/${tokenId}/revoke`)
+    return data
+  },
+  async createTenant(payload: AuthCreateTenantPayload) {
+    const { data } = await api.post<AuthTenantRecord>('/auth/tenants', payload)
+    return data
+  },
+  async updateTenant(tenantId: string, payload: AuthUpdateTenantPayload) {
+    const { data } = await api.patch<AuthTenantRecord>(`/auth/tenants/${tenantId}`, payload)
+    return data
+  },
+}
+
+export const systemConfigApi = {
+  async get() {
+    const { data } = await api.get<SystemConfigResponse>('/system/config')
+    return data
+  },
+  async save(payload: SystemConfigPayload) {
+    const { data } = await api.put<SystemConfigResponse>('/system/config', payload)
+    return data
   },
 }
 
@@ -438,6 +1122,38 @@ export const alertsApi = {
   async acknowledge(alertId: string, comment?: string) {
     const { data } = await api.post(`/alerts/${alertId}/acknowledge`, { comment })
     return data
+  },
+  async resolve(alertId: string, notes?: string) {
+    const { data } = await api.post(`/alerts/${alertId}/resolve`, { notes })
+    return data
+  },
+}
+
+export const reportsApi = {
+  async list(params?: { task_id?: string; alert_id?: string; limit?: number }) {
+    const query = new URLSearchParams()
+    if (params?.task_id) {
+      query.set('task_id', params.task_id)
+    }
+    if (params?.alert_id) {
+      query.set('alert_id', params.alert_id)
+    }
+    if (params?.limit) {
+      query.set('limit', String(params.limit))
+    }
+    const suffix = query.toString()
+    const { data } = await api.get<ReportListResponse>(`/reports${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async get(reportId: string) {
+    const { data } = await api.get<ReportRecord>(`/reports/${reportId}`)
+    return data
+  },
+  async download(reportId: string, filename?: string) {
+    const metadata = filename
+      ? null
+      : await api.get<ReportRecord>(`/reports/${reportId}`).then((response) => response.data)
+    await downloadFileFromApi(`/reports/${reportId}/download`, filename || metadata?.filename || `${reportId}.bin`)
   },
 }
 
@@ -462,6 +1178,61 @@ export const rulesApi = {
 export const devicesApi = {
   async list() {
     const { data } = await api.get<{ total: number; devices: DeviceRecord[] }>('/devices')
+    return data
+  },
+  async get(deviceId: string) {
+    const { data } = await api.get<DeviceRecord>(`/devices/${deviceId}`)
+    return data
+  },
+  async create(payload: DeviceCreatePayload) {
+    const { data } = await api.post<DeviceRecord>('/devices', payload)
+    return data
+  },
+  async update(deviceId: string, payload: DeviceUpdatePayload) {
+    const { data } = await api.put<DeviceRecord>(`/devices/${deviceId}`, payload)
+    return data
+  },
+  async listTags(deviceId: string) {
+    const { data } = await api.get<DeviceTagRecord[]>(`/devices/${deviceId}/tags`)
+    return data
+  },
+  async replaceTags(deviceId: string, tags: DeviceTagRecord[]) {
+    const { data } = await api.put<DeviceTagRecord[]>(`/devices/${deviceId}/tags`, { tags })
+    return data
+  },
+  async downloadImportTemplate(format: 'xlsx' | 'csv' = 'xlsx') {
+    const filename = format === 'csv' ? 'device_tag_import_template.csv' : 'device_tag_import_template.xlsx'
+    await downloadFileFromApi(`/devices/tags/import-template?format=${format}`, filename)
+  },
+  async importTagsPreview(
+    file: File,
+    options?: {
+      fieldMapping?: Record<string, string>
+      valueOverrides?: DeviceTagPreviewOverridePayload
+    },
+  ) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (options?.fieldMapping && Object.keys(options.fieldMapping).length > 0) {
+      formData.append('field_mapping', JSON.stringify(options.fieldMapping))
+    }
+    if (options?.valueOverrides && Object.keys(options.valueOverrides).length > 0) {
+      formData.append('value_overrides', JSON.stringify(options.valueOverrides))
+    }
+    const { data } = await api.post<DeviceTagImportPreviewResponse>('/devices/tags/import-preview', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 60_000,
+    })
+    return data
+  },
+  async connect(deviceId: string) {
+    const { data } = await api.post<{ status: string; device_id: string }>(`/devices/${deviceId}/connect`)
+    return data
+  },
+  async disconnect(deviceId: string) {
+    const { data } = await api.post<{ status: string; device_id: string }>(`/devices/${deviceId}/disconnect`)
     return data
   },
 }
@@ -493,6 +1264,20 @@ export const diagnosisV2Api = {
     const { data } = await api.get<DiagnosisTaskResponseV2>(`/v2/diagnosis/task/${taskId}`, {
       timeout: DIAGNOSIS_TASK_TIMEOUT_MS,
     })
+    return data
+  },
+  async cancelTask(taskId: string, reason?: string) {
+    const { data } = await api.post<DiagnosisTaskResponseV2>(`/v2/diagnosis/task/${taskId}/cancel`, {
+      reason,
+    })
+    return data
+  },
+  async retryTask(taskId: string) {
+    const { data } = await api.post<DiagnosisAnalyzeResponseV2>(`/v2/diagnosis/task/${taskId}/retry`)
+    return data
+  },
+  async resumeTask(taskId: string) {
+    const { data } = await api.post<DiagnosisAnalyzeResponseV2>(`/v2/diagnosis/task/${taskId}/resume`)
     return data
   },
   async listTasks(limit = 10, status?: string) {
@@ -658,5 +1443,93 @@ export const diagnosisV2Api = {
         controller.abort()
       },
     }
+  },
+}
+
+export const intelligenceApi = {
+  async listAssets() {
+    const { data } = await api.get<IntelligenceAssetCatalogResponse>('/intelligence/assets')
+    return data
+  },
+  async getRuntime() {
+    const { data } = await api.get<IntelligenceRuntimeResponse>('/intelligence/runtime')
+    return data
+  },
+  async ingestTelemetry(payload: { asset_id: string; source?: string; points: Record<string, IntelligenceTelemetryPointInput> }) {
+    const { data } = await api.post<IntelligenceSnapshot>('/intelligence/telemetry/ingest', payload)
+    return data
+  },
+  async seedDemo(payload?: {
+    asset_id?: string
+    profile?: 'normal' | 'warning' | 'critical'
+    run_patrol?: boolean
+  }) {
+    const { data } = await api.post<IntelligenceDemoSeedResponse>('/intelligence/demo/seed', payload ?? {})
+    return data
+  },
+  async listLatestSnapshots(assetIds?: string[]) {
+    const query = new URLSearchParams()
+    for (const assetId of assetIds ?? []) {
+      query.append('asset_ids', assetId)
+    }
+    const suffix = query.toString()
+    const { data } = await api.get<IntelligenceSnapshot[]>(`/intelligence/snapshots/latest${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async runPatrol(payload?: { asset_ids?: string[]; schedule_type?: 'manual' | 'scheduled' | 'shadow' }) {
+    const { data } = await api.post<IntelligencePatrolRun>('/intelligence/patrol/run', payload ?? {})
+    return data
+  },
+  async listPatrolRuns(limit = 20) {
+    const { data } = await api.get<IntelligencePatrolRun[]>(`/intelligence/patrol/runs?limit=${limit}`)
+    return data
+  },
+  async getPatrolRun(runId: string) {
+    const { data } = await api.get<IntelligencePatrolRun>(`/intelligence/patrol/runs/${runId}`)
+    return data
+  },
+  async getLatestRisk() {
+    const { data } = await api.get<IntelligenceLatestRiskResponse>('/intelligence/risk/latest')
+    return data
+  },
+  async listReviewQueue(params?: { status?: string; limit?: number }) {
+    const query = new URLSearchParams()
+    if (params?.status) query.set('status', params.status)
+    if (params?.limit) query.set('limit', String(params.limit))
+    const suffix = query.toString()
+    const { data } = await api.get<IntelligenceLabelRecord[]>(`/intelligence/review-queue${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async reviewLabel(labelId: string, payload: {
+    anomaly_type?: string
+    root_cause?: string
+    review_notes?: string
+    final_action?: string
+    false_positive?: boolean
+  }) {
+    const { data } = await api.post<IntelligenceReviewResult>(`/intelligence/review-queue/${labelId}/review`, payload)
+    return data
+  },
+  async listKnowledgeCases(params?: { scene_type?: string; limit?: number }) {
+    const query = new URLSearchParams()
+    if (params?.scene_type) query.set('scene_type', params.scene_type)
+    if (params?.limit) query.set('limit', String(params.limit))
+    const suffix = query.toString()
+    const { data } = await api.get<IntelligenceKnowledgeCase[]>(`/intelligence/knowledge/cases${suffix ? `?${suffix}` : ''}`)
+    return data
+  },
+  async generateLearningCandidates(candidateTypes?: string[]) {
+    const { data } = await api.post<IntelligenceLearningCandidate[]>('/intelligence/learning/candidates/generate', {
+      candidate_types: candidateTypes,
+    })
+    return data
+  },
+  async listLearningCandidates(params?: { candidate_type?: string; limit?: number }) {
+    const query = new URLSearchParams()
+    if (params?.candidate_type) query.set('candidate_type', params.candidate_type)
+    if (params?.limit) query.set('limit', String(params.limit))
+    const suffix = query.toString()
+    const { data } = await api.get<IntelligenceLearningCandidate[]>(`/intelligence/learning/candidates${suffix ? `?${suffix}` : ''}`)
+    return data
   },
 }

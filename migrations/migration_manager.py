@@ -1,13 +1,17 @@
-"""
-数据库迁移管理器
+"""Legacy SQLite-oriented migration manager.
 
-支持版本控制和自动迁移
+This module is retained for historical local SQLite workflows only.
+The production runtime database path is now:
+
+    scripts/manage_database.py
+    src.utils.runtime_migrations
 """
 
 import os
 import re
 import json
 import sqlite3
+import warnings
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -16,6 +20,11 @@ import hashlib
 from src.utils.structured_logging import get_logger
 
 logger = get_logger("migration")
+LEGACY_MIGRATION_NOTICE = (
+    "Legacy migration_manager.py is SQLite-oriented and no longer the production "
+    "runtime migration entrypoint. Use `python scripts/manage_database.py "
+    "<prepare|migrate|seed|init|status>` for the unified bootstrap flow."
+)
 
 
 class Migration:
@@ -52,6 +61,11 @@ class MigrationManager:
     """
     
     def __init__(self, db_path: str, migrations_dir: str = "migrations"):
+        warnings.warn(
+            LEGACY_MIGRATION_NOTICE,
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.db_path = db_path
         self.migrations_dir = Path(migrations_dir)
         self.migrations_dir.mkdir(exist_ok=True)
@@ -438,9 +452,11 @@ def init_migrations(migrations_dir: str = "migrations"):
 
 if __name__ == "__main__":
     import sys
-    
+
+    print(LEGACY_MIGRATION_NOTICE)
     if len(sys.argv) < 2:
         print("Usage: python migration_manager.py <command> [options]")
+        print("Recommended: python scripts/manage_database.py <command>")
         print("\nCommands:")
         print("  init                 初始化迁移文件")
         print("  status               查看迁移状态")
